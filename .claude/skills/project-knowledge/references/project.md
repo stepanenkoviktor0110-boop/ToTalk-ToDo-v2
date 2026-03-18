@@ -7,53 +7,48 @@ This file provides high-level project overview for AI agents. Helps agents under
 
 ## Project Overview
 
-**Name:** [Project Name]
+**Name:** ToTalk-ToDo
 
-**Description:** [One-line description of what this project does]
+**Description:** Telegram bot that converts voice messages into clear, actionable task lists — removing verbal noise, resolving ambiguous references, and ordering tasks by dependencies.
 
-[Optional: 1-2 additional sentences with key context]
+The core idea: people speak as they think — chaotically, with hesitations, vague names, and unfinished thoughts. The bot understands this and outputs not a transcript, but an action plan.
 
 ---
 
 ## Target Audience
 
-**Primary users:** [Who uses this - e.g., "Developers building CLI tools", "Small business owners"]
+**Primary users:** People who find it easier to dictate than to type — entrepreneurs, managers, anyone with high cognitive load who loses thoughts while planning aloud.
 
-**Use case:** [Why they need it - e.g., "Need to automate deployment workflows", "Want to track inventory without complex software"]
+**Use case:** User sends a voice message with a chaotic stream of thoughts. Bot extracts concrete tasks, resolves ambiguities ("that guy who fixed..." → "clarify the repairman's name from Anya"), and returns an ordered action plan.
 
 ---
 
 ## Core Problem
 
-[What pain point are we solving? 2-3 sentences describing the problem this project addresses]
-
-[Example format: "Currently users have to [manual process]. This is slow/error-prone/expensive because [reason]. We solve this by [solution approach]."]
+Currently, when people dictate tasks or plans, they get either a raw transcript (useless) or have to manually extract actions from their own ramblings. This is tedious and thoughts get lost. ToTalk-ToDo solves this by using STT + LLM to intelligently extract structured tasks from natural speech, including resolving unclear references and ordering by dependencies.
 
 ---
 
 ## Key Features
 
-[List 3-5 core capabilities - only the most important ones. Details belong in project backlog.]
-
-- **[Feature 1 name]** - [What it does in 1 sentence]
-- **[Feature 2 name]** - [What it does in 1 sentence]
-- **[Feature 3 name]** - [What it does in 1 sentence]
-- **[Feature 4 name]** - [What it does in 1 sentence]
-- **[Feature 5 name]** - [What it does in 1 sentence]
-
-<!--
-Feature backlog, detailed roadmap, and development phases live in the project backlog
-(see CLAUDE.md for backlog path), not here. This file is a stable overview.
--->
+- **Voice-to-tasks pipeline** — Accept voice message → transcribe via faster-whisper → extract tasks via LLM → return numbered action list
+- **Ambiguity resolution** — Detect vague references ("that guy", "or maybe Andrey") and turn them into explicit clarification tasks
+- **Dependency ordering** — Arrange tasks logically (can't call someone whose number you don't know yet)
+- **Multi-voice context** — Multiple voice messages forwarded simultaneously are treated as a single context
+- **Feedback collection** — After each voice message, request 1-5 rating; if below 5, ask for a short comment
 
 ---
 
 ## Out of Scope
 
-[What we explicitly DON'T do - helps agents avoid scope creep]
+- Persistent memory between sessions (v2)
+- Task completion tracking (v2)
+- Reminders and notifications (v2)
+- Video notes (voice circles)
+- Multi-language support (v2)
+- Integration with external task managers — Notion, Todoist (v3)
+- Interrupted context detection — asking "will you continue?" (v2)
 
-- [Thing 1 we don't support - e.g., "No mobile app version"]
-- [Thing 2 we don't support - e.g., "No multi-tenant support"]
-- [Thing 3 we don't support - e.g., "No real-time collaboration features"]
+## Trial System
 
-<!-- Add more items as needed -->
+- 30 free voice messages → feedback request → 20 more free → after that 10/day or package deals (v2 monetization)

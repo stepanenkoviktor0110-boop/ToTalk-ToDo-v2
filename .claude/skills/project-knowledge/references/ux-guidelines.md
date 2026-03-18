@@ -1,145 +1,63 @@
 # UX Guidelines
 
-<!--
-OPTIONAL FILE — DELETE if project has no significant UI (CLI tools, bots with minimal text, backend-only).
-For projects with minimal UI, add a brief "UX" section in patterns.md instead.
--->
-
 ## Purpose
-UX standards and user-facing communication for AI agents. Helps agents write consistent UI text and follow design patterns.
+UX standards for bot communication in Telegram. Helps agents write consistent bot messages.
 
 ---
 
 ## Interface Language
 
-**Primary language:** [e.g., "Russian" / "English" / "Both (i18n support)"]
+**Primary language:** Russian
 
-**Localization:** [e.g., "Single language - no i18n" / "Multi-language via `/locales/`" / "Using react-i18next"]
-
-<!-- If multilingual, specify which language is default and where translation files are -->
+**Localization:** Single language — no i18n in MVP
 
 ---
 
 ## Tone of Voice
 
-**Overall tone:** [Choose: Formal / Professional / Casual / Friendly / Technical / Simple]
+**Overall tone:** Friendly, concise
 
-**Writing style:** [Describe in detail - not just keywords. E.g., "Short, direct sentences. Active voice. Focus on user actions. Avoid corporate jargon and passive constructions. Technical accuracy without overwhelming with details."]
+**Writing style:** Short sentences. No formalities. The bot speaks as a helpful assistant, not a corporate system. Uses "ты" form. Avoids jargon and technical terms in user-facing messages.
 
 **Voice characteristics:**
-- **Formality level:** [e.g., "Professional but approachable - use 'you' but avoid slang" / "Casual and friendly - contractions OK, conversational"]
-- **Emotional tone:** [e.g., "Warm and supportive" / "Neutral and factual" / "Confident and authoritative"]
-- **Technical complexity:** [e.g., "Explain technical concepts simply" / "Assume technical audience" / "Balance - simple for common tasks, detailed for advanced"]
-- **Humor:** [e.g., "Light humor in empty states, serious in errors" / "No humor - strictly professional" / "Playful but not distracting"]
+- **Formality level:** Casual but respectful — "ты", no slang, no corporate speak
+- **Emotional tone:** Warm and supportive — the bot is on the user's side
+- **Technical complexity:** Hide all technical details from the user
+- **Humor:** Minimal — friendly but not clownish
 
 **Example phrases by context:**
 
-- ✅ Good: ""
-
-- ❌ Avoid: ""
-
+- Good: "Обрабатываю голосовое...", "Вот что нужно сделать:", "Не смог разобрать задачи — попробуй ещё раз?"
+- Avoid: "Произошла ошибка #500", "Транскрипция завершена, запускаю NLP-pipeline", "Пожалуйста, повторите попытку позднее"
 
 ---
 
 ## Domain Glossary
 
-[**Instructions - remove this section after filling:**
-
-**When to add terms:**
-- Domain-specific concepts that appear frequently in UI (e.g., in fintech: "wallet" vs "account" vs "balance")
-- Terms that might be confused with similar concepts (e.g., "order" vs "booking" vs "reservation")
-- Product-specific jargon that needs consistent naming across all text
-
-**What NOT to add:**
-- Generic UI words (button, form, page, menu, settings, etc.)
-- Self-explanatory terms that don't need clarification
-- One-time mentions or obvious concepts
-
-**Important:** Empty glossary is perfectly fine. Only add terms when real naming conflicts or domain complexity emerges during development.
-
-**Format:**
-- **[Term]** — [What it means specifically in your product context]
-  *UI example: "[Where/how users see it]"*
-
-]
-
-<!-- Start empty. Fill only when domain terminology actually appears and needs consistency -->
+- **Голосовое** — voice message in Telegram (not "аудиосообщение", not "войс")
+- **Задача** — extracted action item (not "таск", not "действие")
+- **Уточнение** — clarification sub-task when something is ambiguous
 
 ---
 
 ## Text Patterns
 
-[How we write specific UI elements - keep examples SHORT]
+### Bot Responses
 
-### Buttons
-**Style:** [e.g., "Action verb + object: 'Save changes', 'Create account'" / "Single verb: 'Save', 'Cancel'"]
+All user-facing strings are defined in a single messages module (see `src/utils/telegram.js`).
 
-**Examples:**
-- Primary actions: [e.g., "Save changes", "Create workspace"]
-- Secondary actions: [e.g., "Cancel", "Go back"]
-- Destructive actions: [e.g., "Delete account", "Remove workspace"]
+**Task list** — header line introducing the list, then numbered tasks. Tone: helpful, concise.
+
+**No tasks found** — friendly message explaining nothing actionable was detected, suggesting to try again. Not a dry error.
+
+**Processing status** — short "working on it" message, shown when processing takes more than 5 seconds.
+
+**Long voice warning** — heads-up for voice messages over 3 minutes that processing will take longer.
 
 ### Error Messages
-**Format:** [e.g., "Problem + what to do: 'Invalid email. Please check and try again.'" / "Just state the problem: 'Invalid email address'"]
 
-**Examples:**
-- Validation: [e.g., "Email is required"]
-- Auth errors: [e.g., "Incorrect password. Try again or reset password."]
-- System errors: [e.g., "Something went wrong. Please try again."]
+Errors are always user-friendly — no technical details, no error codes. Three categories: transcription failure (suggest re-recording in a quiet place), LLM failure (suggest trying again in a minute), non-voice message (explain what the bot does).
 
-### Success Messages
-**Format:** [e.g., "Confirmation + next step" / "Just confirmation"]
+### Feedback Request
 
-**Examples:**
-- [e.g., "Account created! Check your email to verify."]
-- [e.g., "Changes saved successfully."]
-
-### Loading States
-**Style:** [e.g., "Present continuous: 'Loading...', 'Saving changes...'" / "Please wait: 'Please wait...'"]
-
-**Examples:**
-- [e.g., "Loading workspace..."]
-- [e.g., "Saving..."]
-
----
-
-## Copy Reference
-
-[If you have a separate file with all UI texts, link it here]
-
-**Location:** [e.g., "See `/src/copy/ui-messages.ts` for all user-facing text" / "All text in `/locales/en.json`"]
-
-<!-- If no separate file, write: "N/A - UI copy defined inline in components" -->
-
----
-
-## Design System
-
-[Visual design specifications - only if custom design exists]
-
-**Design files:** [e.g., "Figma: [link]" / "No design files - using default [framework] components"]
-
-**Color palette:**
-- Primary: [e.g., "#0066FF" / "Default Material Blue"]
-- Secondary: [e.g., "#FF6B00" / "N/A"]
-- Error/Warning/Success: [e.g., "#FF0000, #FFA500, #00CC00" / "Standard"]
-
-**Key components:**
-- [e.g., "Custom Button with rounded corners + shadow"]
-- [e.g., "Modal with blur backdrop"]
-- [e.g., "Using standard [Chakra UI / Material UI / Ant Design] components"]
-
-<!-- Only include if there are custom visual elements. If using standard framework components, write: "Standard [framework name] components with default theme" -->
-
----
-
-## Accessibility
-
-[Only include if there are specific requirements beyond standard practices]
-
-**Requirements:**
-- [e.g., "All buttons must have aria-label if icon-only"]
-- [e.g., "Forms must have explicit <label> elements, no placeholder-only"]
-- [e.g., "Color contrast ratio minimum 4.5:1"]
-
-<!-- If following standard a11y practices with no special requirements, write: "Follow standard WCAG 2.1 AA guidelines" -->
+After returning the task list, bot asks for a 1-5 rating. If rating is below 5, bot asks for a short comment explaining what was wrong. After receiving feedback, bot thanks the user. All strings in the messages module.

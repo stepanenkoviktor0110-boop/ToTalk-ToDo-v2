@@ -7,23 +7,20 @@ Deployment process, infrastructure, and production operations for AI agents.
 
 ## Deployment Platform
 
-**Platform:** [Where it deploys - e.g., "Vercel" / "Railway" / "AWS EC2" / "VPS"]
+**Platform:** VPS (Ubuntu 24.04)
 
-**Type:** [e.g., "Serverless" / "Container (Docker)" / "Static hosting" / "Browser extension"]
+**Type:** systemd service (same as other bots on this server)
 
-**Why this platform:** [One reason - e.g., "Free tier covers our needs" / "Need full server control"]
+**Why this platform:** Existing server with Node.js and faster-whisper already running. Full server control, no additional costs.
 
 ---
 
 ## Access Information
 
 **SSH Access:**
-- Production: `ssh user@server-ip` [e.g., `ssh root@123.45.67.89`]
-- Staging: [if applicable]
+- Production: `ssh xander_bot@37.233.82.205`
 
-> If not configured, agent will request: server address, username, and port.
-
-**Credentials location:** [e.g., "GitHub Actions secrets" / "1Password vault"]
+**Credentials location:** `.env` file on VPS at `/home/xander_bot/totalk-todo/.env`
 
 ---
 
@@ -31,81 +28,101 @@ Deployment process, infrastructure, and production operations for AI agents.
 
 **See:** [.env.example](../../.env.example) in project root
 
-[List all required environment variables with their purpose - NO VALUES]
-
-<!-- Keep .env.example updated. Comment each variable's purpose in that file. -->
+| Variable | Purpose |
+|----------|---------|
+| `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather |
+| `GIGACHAT_CLIENT_ID` | GigaChat API client ID |
+| `GIGACHAT_CLIENT_SECRET` | GigaChat API client secret |
+| `WHISPER_URL` | faster-whisper endpoint (default: `http://localhost:8765`) |
+| `NODE_ENV` | Environment (`production` / `development`) |
 
 ---
 
 ## Deployment Triggers
 
-**Production:** [e.g., "Auto-deploy on push to `main` after tests pass"]
+**Production:** Manual deploy via SSH — `git pull origin main && npm install --production && systemctl restart totalk-todo`
 
-**Staging:** [e.g., "Auto-deploy on push to `dev`"]
-
-**Preview:** [e.g., "Auto-deploy for every PR" / "Not configured"]
+**Staging:** Not configured. Development happens on `dev` branch, tested locally or on VPS directly.
 
 ---
 
 ## Pre-Deploy Checklist
 
-[Only critical manual steps - if fully automated, write "Fully automated via CI"]
-
-- [ ] [e.g., "Run `npm run migrate:prod` if schema changed"]
-- [ ] [e.g., "Verify env vars set in platform dashboard"]
+- [ ] Run `npm test` locally before pushing
+- [ ] Verify env vars set on VPS if new ones were added
+- [ ] Check faster-whisper is running: `systemctl is-active faster-whisper`
 
 ---
 
 ## Rollback Procedure
 
-**Platform rollback:** [e.g., "Vercel: 'Redeploy' on previous deployment" / "VPS: `git checkout <prev-commit>`"]
+**Platform rollback:** `git checkout <prev-commit> && npm install --production && systemctl restart totalk-todo`
 
-**Manual steps if needed:** [e.g., "If DB migration broke: run rollback SQL from /migrations/rollbacks/"]
-
-**Approximate time:** [e.g., "~2 minutes" / "~10 minutes with DB rollback"]
+**Approximate time:** ~2 minutes
 
 ---
 
 ## Environments
 
-**Production:** [URL] - Deploys from `main` branch
+**Production:** VPS 37.233.82.205 — Deploys from `main` branch
 
-**Staging:** [URL] - Deploys from `dev` branch
+**Working directory:** `/home/xander_bot/totalk-todo/`
 
-<!-- If single environment, only list Production -->
+---
+
+## Systemd Service
+
+File: `/etc/systemd/system/totalk-todo.service`
+
+```ini
+[Unit]
+Description=ToTalk-ToDo Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+User=xander_bot
+WorkingDirectory=/home/xander_bot/totalk-todo
+ExecStart=/usr/bin/node src/bot.js
+Restart=on-failure
+RestartSec=10
+EnvironmentFile=/home/xander_bot/totalk-todo/.env
+
+[Install]
+WantedBy=multi-user.target
+```
+
+---
+
+## Existing Services on VPS
+
+| Service | Status | Port |
+|---------|--------|------|
+| faster-whisper (Flask) | Running | 8765 |
+| n8n | Running | 5678 |
+| Node.js v22 | Installed | — |
+
+faster-whisper is already deployed and processing voice — **no need to set up again**.
 
 ---
 
 ## Monitoring & Observability
 
-<!--
-SCALING HINT: If this section grows beyond ~80 lines, extract to references/monitoring.md.
-If no monitoring configured, write: "Logs output to stdout only. No error tracking configured."
--->
-
 ### Logging
 
-**Where:** [e.g., "stdout (Docker logs)" / "CloudWatch" / "Local files"]
-**Format:** [e.g., "JSON structured" / "Plain text" / "Default framework logging"]
+**Where:** journalctl (`journalctl -u totalk-todo -f`)
+**Format:** Default console output
 
 ### Error Tracking
 
-**Tool:** [e.g., "Sentry" / "Rollbar" / "None"]
-**Config:** [e.g., "SENTRY_DSN in .env" / "Not configured"]
+**Tool:** None configured in MVP
+**Config:** Logs to stdout only, visible via journalctl
 
 ### Health Checks
 
-**Endpoint:** [e.g., "GET /health" / "None"]
-**Checks:** [e.g., "DB connectivity, external API status" / "N/A"]
+**Endpoint:** None in MVP
+**Checks:** `systemctl is-active totalk-todo`
 
-<!-- Optional sections below — delete if not applicable -->
+## CI/CD
 
-### Metrics
-
-**Analytics:** [e.g., "Google Analytics" / "Vercel Analytics" / "None"]
-**Key metrics:** [e.g., "API response time, error rate" / "N/A"]
-
-### Alerts
-
-**Tool:** [e.g., "Sentry email alerts" / "PagerDuty" / "None"]
-**Rules:** [e.g., "Error rate > 5%" / "N/A"]
+Manual deploy in MVP. GitHub Actions planned for v2 after code stabilization.

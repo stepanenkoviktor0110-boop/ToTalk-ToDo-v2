@@ -1,6 +1,6 @@
-# Project: [PROJECT NAME]
+# Project: ToTalk-ToDo
 
-> **[ONE SENTENCE - WHAT THIS PROJECT IS ABOUT]**
+> **Telegram-бот, который превращает голосовые сообщения в чёткий список задач — убирая словесный мусор, разрешая неопределённости и упорядочивая по зависимостям.**
 
 ---
 

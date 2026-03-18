@@ -7,113 +7,102 @@ Technical architecture overview for AI agents. Helps agents understand HOW the s
 
 ## Tech Stack
 
-**Frontend:** [Framework/Library - e.g., "React 18 with Vite"]
-- **Why:** [One reason - e.g., "Fast dev experience with HMR, widely supported"]
+**Runtime:** Node.js v22 (ESM — `"type": "module"` in package.json)
+- **Why:** Already on VPS, unified stack, modern ESM support
 
-**Backend:** [Framework - e.g., "Express.js" / "FastAPI" / "None - static site"]
-- **Why:** [One reason - e.g., "Minimal overhead for REST API, large ecosystem"]
+**Telegram framework:** grammy
+- **Why:** Lightweight, ESM-native, excellent documentation, MIT license, free
 
-**Database:** [Database type - e.g., "PostgreSQL" / "MongoDB" / "None"]
-- **Why:** [One reason - e.g., "ACID transactions needed for payments" / "N/A"]
+**LLM (task extraction):** GigaChat API (GigaChat-2) — behind an LLM provider abstraction
+- **Why:** Free tier (1M tokens/year), excellent Russian language support including slang and conversational speech, no VPN needed, registration with Russian phone number, payment in rubles
+- **Abstraction:** Single interface for LLM provider. GigaChat is the default; can be swapped to DeepSeek, Claude, or others by changing config
 
-<!-- Add other stack components if needed: Mobile, Desktop, etc -->
+**STT:** faster-whisper (Flask server, port 8765) — already deployed on VPS
+- **Why:** Self-hosted, free, good Russian speech recognition
+
+**Database:** SQLite
+- **Why:** Simple, no infrastructure needed, stores feedback ratings and trial counters, easy export to CSV
+
+**Hosting:** VPS 37.233.82.205, user `xander_bot`
 
 ---
 
 ## Project Structure
 
-[Brief map of where things live - helps agents find relevant code quickly]
+Entry point is `src/bot.js` — initializes grammy bot and registers handlers.
 
-```
-/
-├── src/
-│   ├── components/     [UI components]
-│   ├── api/           [API routes/endpoints]
-│   ├── utils/         [Helper functions]
-│   ├── config/        [Configuration files]
-│   └── types/         [TypeScript types/interfaces]
-├── tests/             [Test files]
-└── .claude/           [AI agent context]
-```
+**`src/handlers/`** — Telegram message handlers. `voice.js` orchestrates the full voice-to-tasks pipeline.
 
-[Adjust structure to match your project - keep it simple]
+**`src/services/`** — Business logic services. `transcription.js` wraps the faster-whisper HTTP client. `llm/` directory contains the LLM provider abstraction (`provider.js`) and implementations (`gigachat.js`). `taskExtractor.js` orchestrates task extraction using the LLM provider.
+
+**`src/db/`** — SQLite database connection, queries, and migrations.
+
+**`src/utils/`** — Helpers for formatting and sending Telegram responses.
+
+**`prompts/`** — System prompts as separate markdown files (iterable without code changes). `task-extraction.md` is the main prompt for LLM task extraction.
 
 ---
 
 ## Key Dependencies
 
-[List ONLY critical packages that agents need to know about - not every dependency]
-
 **Critical packages:**
-- `[package-name]` - [Why we use it - e.g., "Authentication - handles JWT tokens"]
-- `[package-name]` - [Why we use it - e.g., "Stripe SDK - payment processing"]
-- `[package-name]` - [Why we use it - e.g., "Zod - runtime validation for API inputs"]
-
-<!-- Add 3-5 most important dependencies. Skip obvious ones like React, Express basics -->
+- `grammy` — Telegram Bot API framework
+- `better-sqlite3` — SQLite driver for Node.js (synchronous, fast)
+- `node-fetch` — HTTP client for faster-whisper and GigaChat API calls
+- `dotenv` — Environment variable loading
 
 ---
 
 ## External Integrations
 
-[Third-party services/APIs this project connects to]
+**Telegram Bot API**
+- **Purpose:** Receive voice messages, send task lists back to user
+- **Auth method:** Bot token from @BotFather in `TELEGRAM_BOT_TOKEN` env var
 
-**[Service name - e.g., "Stripe"]**
-- **Purpose:** [What we use it for - e.g., "Payment processing for subscriptions"]
-- **Auth method:** [How we authenticate - e.g., "API key in STRIPE_SECRET_KEY env var"]
+**GigaChat API**
+- **Purpose:** Extract structured tasks from transcribed speech
+- **Auth method:** OAuth2 client credentials flow. `GIGACHAT_CLIENT_ID` and `GIGACHAT_CLIENT_SECRET` env vars. Token refreshed automatically.
 
-<!-- If no external integrations, write: "None - no external API dependencies" -->
+**faster-whisper**
+- **Purpose:** Speech-to-text transcription
+- **Auth method:** No auth — local service on same VPS, `WHISPER_URL=http://localhost:8765`
 
 ---
 
 ## Data Flow
 
-[Describe in 2-4 sentences how data moves through the system. Focus on the main flow, not edge cases.]
-
-<!-- Example: "User submits form → Frontend validates with Zod → POST to /api/users → Backend validates again → Save to PostgreSQL → Return user object → Update UI." -->
+User sends voice message in Telegram → bot downloads audio file via Telegram API → sends audio to faster-whisper (HTTP POST to port 8765) → receives text transcript → sends transcript to GigaChat API with system prompt for task extraction → receives structured task list → formats as numbered list → sends back to user in same chat → asks for 1-5 feedback rating.
 
 ---
 
 ## Data Model
 
-<!--
-This section describes database/storage architecture.
-SCALING HINT: If this section grows beyond ~80 lines, extract to a separate references/database.md and link from here.
--->
+**Database:** SQLite (via better-sqlite3)
 
-**Database:** [Type - e.g., "PostgreSQL 15" / "MongoDB" / "Not applicable"]
+### Main Tables
 
-### Main Tables/Collections
+**voice_requests**
+- Purpose: Log of processed voice messages for trial counting and analytics
+- Key fields: `id`, `telegram_user_id`, `duration_seconds`, `task_count`, `created_at`
+- Relationships: `voice_requests.id → feedback.voice_request_id`
 
-[List key tables/collections and their relationships - keep it brief]
-
-**[table_name or CollectionName]**
-- Purpose: [What this stores - e.g., "User accounts and profiles"]
-- Key fields: [List 3-5 most important fields]
-- Relationships: [Links to other tables - e.g., "users.id → orders.user_id"]
-
-<!-- Add main tables. Skip junction/helper tables unless critical -->
+**feedback**
+- Purpose: User feedback after each voice message processing
+- Key fields: `id`, `voice_request_id`, `rating` (1-5), `comment` (nullable, requested when rating < 5), `created_at`
+- Relationships: `feedback.voice_request_id → voice_requests.id`
 
 ### Key Constraints
 
-[Only constraints that would cause errors if violated]
-
-- **Unique constraints:** [e.g., "users.email must be unique"]
-- **Foreign keys:** [e.g., "orders.user_id → users.id (ON DELETE CASCADE)"]
-- **Required fields:** [e.g., "users: email, password_hash are NOT NULL"]
+- **Required fields:** `voice_requests`: `telegram_user_id`, `created_at`. `feedback`: `voice_request_id`, `rating`.
+- **Rating range:** `feedback.rating` CHECK (1-5)
+- **Foreign keys:** `feedback.voice_request_id → voice_requests.id`
 
 ### Migration Strategy
 
-**Tool:** [e.g., "Prisma Migrate" / "Alembic" / "Django migrations" / "Manual SQL scripts"]
-
-**Process:** [Brief - e.g., "Run `npm run migrate` before deploy. Migrations in /prisma/migrations/. Never edit old migrations."]
+**Tool:** Manual SQL scripts in `src/db/migrations/`
+**Process:** Migrations run automatically on bot startup. Each migration file has a sequence number prefix.
 
 ### Sensitive Data
 
-[Fields containing PII or secrets - important for security]
-
 **PII fields:**
-- [table.field - e.g., "users.email"]
-- [table.field - e.g., "users.phone_number"]
-
-<!-- If no sensitive data, write "No PII stored" -->
-<!-- If using alternative storage (localStorage, file system, Chrome Storage API), describe it here instead of tables -->
+- `voice_requests.telegram_user_id` — Telegram user identifier
