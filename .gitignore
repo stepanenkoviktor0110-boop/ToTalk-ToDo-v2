@@ -1,36 +1,52 @@
-# Security & credentials
-ide/
-statsig/
-telemetry/
-.credentials.json
-.mcp.json
+# Environment variables and secrets (CRITICAL - MUST ignore)
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+credentials.json
+secrets/
+.secrets/
+*api-key*
+*apikey*
+*secret*
 
-# User data (privacy)
-projects/
-projects-registry.json
-projects.md
-project-ideas.md
-backlog.md
-history.jsonl
-todos/
-plans/
-file-history/
-plugins/
-stats-cache.json
+# Local settings (not shared)
+.claude/settings.local.json
 
-# Session & runtime
-session-env/
-shell-snapshots/
+# Dependencies
+node_modules/
+venv/
+__pycache__/
+*.pyc
 
-# Debug & cache
-debug/
-downloads/
-tmp/
+# Build outputs
+dist/
+build/
+.next/
+out/
 
-# System
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
 .DS_Store
-*.lock
+Thumbs.db
 
-# Local settings
-settings.json
-settings.local.json
+# Logs
+*.log
+logs/
+
+# Test coverage
+coverage/
+.coverage
+htmlcov/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
