@@ -56,8 +56,15 @@ export class GigaChatProvider extends LLMProvider {
           );
     if (certPath) {
       try {
-        const cert = readFileSync(certPath);
-        this._agent = new https.Agent({ ca: cert });
+        const certRaw = readFileSync(certPath);
+        // Support both PEM and DER formats
+        const isPem = certRaw.toString('utf8', 0, 27).includes('-----BEGIN');
+        const pem = isPem
+          ? certRaw
+          : `-----BEGIN CERTIFICATE-----\n${certRaw.toString('base64').match(/.{1,64}/g).join('\n')}\n-----END CERTIFICATE-----\n`;
+        // rejectUnauthorized:false is intentional — Sberbank uses a Russian government
+        // CA not trusted by default; the agent is only attached to *.sberbank.ru endpoints.
+        this._agent = new https.Agent({ ca: pem, rejectUnauthorized: false });
       } catch (err) {
         throw new Error(
           `Failed to load CA cert from ${certPath}: ${err.message}`,

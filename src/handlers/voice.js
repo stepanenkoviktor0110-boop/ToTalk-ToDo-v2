@@ -262,29 +262,22 @@ export async function processVoiceBatch(ctx, voices, deps) {
     return;
   }
 
-  // Truncate combined transcript before sending to LLM (Decision 4)
+  // Build combined transcript for DB storage
   let combinedTranscript = transcripts.join('\n');
-  let truncatedByHandler = false;
   if (combinedTranscript.length > MAX_TRANSCRIPT_LENGTH) {
     combinedTranscript = combinedTranscript.slice(0, MAX_TRANSCRIPT_LENGTH);
-    truncatedByHandler = true;
   }
 
-  // Extract tasks from truncated combined transcript
+  // Extract tasks — pass array, taskExtractor handles join+truncation
   let result;
   try {
-    result = await extractTasks(combinedTranscript, deps.llmProvider);
+    result = await extractTasks(transcripts, deps.llmProvider);
   } catch (err) {
     const ts = new Date().toISOString();
     // Decision 12: generic error type only, no transcript/PII in logs
     console.error(`[${ts}] task extraction failed: chatId=${ctx.chat.id}, errorType=${err.constructor.name}`);
     await ctx.reply(GENERIC_ERROR);
     return;
-  }
-
-  // Merge truncation flags (handler or extractor may set it)
-  if (truncatedByHandler) {
-    result = { ...result, truncated: true };
   }
 
   // Handle special markers
