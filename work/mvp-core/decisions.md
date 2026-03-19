@@ -43,7 +43,10 @@ Review details — in JSON files via links. QA report — in logs/working/.
 
 **Reviews:**
 
-(pending code-reviewer, security-auditor, infrastructure-reviewer)
+*Round 1:*
+- code-reviewer: pass (2 major, 5 minor) → [logs/working/task-1/code-reviewer-1.json]
+- security-auditor: pass (0 critical, 3 minor) → [logs/working/task-1/security-auditor-1.json]
+- infrastructure-reviewer: pass (0 critical, 2 minor) → [logs/working/task-1/infrastructure-reviewer-1.json]
 
 **Verification:**
 - `npm test` → 13 passed
@@ -51,35 +54,47 @@ Review details — in JSON files via links. QA report — in logs/working/.
 
 ---
 
-## Task 3: System Prompt for Task Extraction
-
-**Status:** Done
-**Commit:** 23b3afe
-**Agent:** prompt-engineer
-**Summary:** Создан системный промпт `prompts/task-extraction.md` для извлечения задач из транскриптов голосовых сообщений. Промпт на русском языке, содержит правила очистки речевого мусора, разрешения трёх типов неопределённостей (неизвестный человек, альтернатива, делегирование), упорядочивания по зависимостям, защиту от prompt injection и 4 few-shot примера. Маркеры `__NO_TASKS__` и `__TOO_MANY_TASKS__` задокументированы в секции `<markers>` для интеграции с Task 5.
-**Deviations:** None
-
-**Reviews:**
-
-(pending prompt-reviewer)
-
-**Verification:**
-- Manual walkthrough of 5 sample inputs from task spec — all produce expected outputs
-
----
-
 ## Task 2: LLM Provider Abstraction + GigaChat Client
 
 **Status:** Done
-**Commit:** (pending)
+**Commit:** 052f23c, ee54fc3
 **Agent:** llm-engineer
-**Summary:** Built the LLM provider abstraction (`LLMProvider` base class with `complete()` contract) and the `GigaChatProvider` implementation with OAuth2 token lifecycle (proactive refresh <60s before expiry, dedup of parallel refresh), retry logic (once on 401 with token refresh, once on 5xx/network error), 15s AbortController timeout, and Sberbank CA cert loading via HTTPS agent. Used constructor injection for `fetchFn` to enable clean unit testing without unstable ESM module mocking. Credential sanitization enforced: error logs contain only status codes and response bodies, never Authorization headers or tokens.
+**Summary:** Built the LLM provider abstraction (`LLMProvider` base class with `complete()` contract) and the `GigaChatProvider` implementation with OAuth2 token lifecycle (proactive refresh <60s before expiry, dedup of parallel refresh), retry logic (once on 401 with token refresh, once on 5xx/network error), 15s AbortController timeout, and Sberbank CA cert loading via HTTPS agent. Used constructor injection for `fetchFn` to enable clean unit testing. Round 1 review found 3 critical issues (Windows path, retry bypass, dedup bypass) — all fixed in Round 2.
 **Deviations:** None
 
 **Reviews:**
 
-(pending code-reviewer, security-auditor, test-reviewer)
+*Round 1:*
+- code-reviewer: fail (3 critical, 4 major) → [logs/working/task-2/code-reviewer-1.json]
+- security-auditor: pass (3 major) → [logs/working/task-2/security-auditor-1.json]
+- test-reviewer: fail (4 major gaps) → [logs/working/task-2/test-reviewer-1.json]
+
+*Round 2 (after fixes):*
+- code-reviewer: pass (2 minor remain) → [logs/working/task-2/code-reviewer-2.json]
+- security-auditor: pass (1 minor remain) → [logs/working/task-2/security-auditor-2.json]
+- test-reviewer: pass (2 minor remain) → [logs/working/task-2/test-reviewer-2.json]
 
 **Verification:**
-- `npm test` → 24 passed (13 existing + 11 new)
-- Smoke test `node -e "import { GigaChatProvider } from './src/services/llm/gigachat.js'; console.log('import OK')"` → OK
+- `npm test` → 29 passed (13 DB + 16 LLM)
+- Smoke test import → OK
+
+---
+
+## Task 3: System Prompt for Task Extraction
+
+**Status:** Done
+**Commit:** 23b3afe, 5de23c5
+**Agent:** prompt-engineer
+**Summary:** Создан системный промпт `prompts/task-extraction.md` для извлечения задач из транскриптов голосовых сообщений. Промпт на русском языке, содержит правила очистки речевого мусора, разрешения трёх типов неопределённостей, упорядочивания по зависимостям, защиту от prompt injection и 5 few-shot примеров. Round 1 review нашёл 3 major: баг с "одним словом" vs маркеры, отсутствие примера TOO_MANY_TASKS, слабая injection-защита — все исправлены в Round 2.
+**Deviations:** None
+
+**Reviews:**
+
+*Round 1:*
+- prompt-reviewer: fail (3 major) → [logs/working/task-3/prompt-reviewer-1.json]
+
+*Round 2 (after fixes):*
+- prompt-reviewer: pass (minors only) → [logs/working/task-3/prompt-reviewer-2.json]
+
+**Verification:**
+- Manual walkthrough of 5 sample inputs — all produce expected outputs
