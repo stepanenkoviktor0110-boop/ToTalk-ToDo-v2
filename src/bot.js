@@ -56,11 +56,11 @@ export function createBot(token, options = {}) {
   // Non-voice message catch-all — covers text, photo, sticker, and every
   // other message type except voice (handled in Task 6).
   // Single handler avoids DRY violations and silently-unhandled new types.
-  bot.on('message', async (ctx) => {
-    // Skip voice messages — they will be handled by Task 6
-    if (ctx.message.voice) return;
+  bot.on('message', async (ctx, next) => {
+    // Pass voice/audio messages to Task 6 handler via next()
+    if (ctx.message.voice || ctx.message.audio) return next();
     // Skip commands (already handled above)
-    if (ctx.message.text && ctx.message.text.startsWith('/')) return;
+    if (ctx.message.text && ctx.message.text.startsWith('/')) return next();
     await ctx.reply(NON_VOICE_EXPLANATION);
   });
 
