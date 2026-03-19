@@ -98,3 +98,20 @@ Review details — in JSON files via links. QA report — in logs/working/.
 
 **Verification:**
 - Manual walkthrough of 5 sample inputs — all produce expected outputs
+
+---
+
+## Task 4: Bot Entry Point + Handler Skeleton
+
+**Status:** Done
+**Commit:** (pending)
+**Agent:** bot-builder
+**Summary:** Created grammy bot entry point (`src/bot.js`) with `createBot()` factory function, session middleware matching tech-spec contract (awaitingFeedback, voiceRequestId, awaitingComment, awaitingConsent, inSurvey, surveyRetries), /start handler with upsertUser and dynamic trial info in welcome message, non-voice message handlers for text/photo/sticker/document/video/audio/animation/location/contact that exclude voice messages (left for Task 6), and global error handler with credential sanitization (Decision 16). Created centralized messages module (`src/utils/messages.js`) with all Russian strings. TDD: 13 tests written first (10 bot + 3 messages), confirmed failing, then implementation made all pass.
+**Deviations:** Added `options` parameter to `createBot()` to accept grammy `botInfo` for testability — not in spec but necessary for unit testing without network calls.
+
+**Reviews:**
+
+(no review round — direct implementation)
+
+**Verification:**
+- `npm test` → 59 passed (29 existing + 16 LLM + 10 bot + 3 messages + 1 extra from llm.test.js)
