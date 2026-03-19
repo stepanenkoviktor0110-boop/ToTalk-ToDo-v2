@@ -5,8 +5,8 @@ describe('messages module', () => {
   it('should export WELCOME message containing trial info', () => {
     expect(typeof WELCOME).toBe('string');
     expect(WELCOME.length).toBeGreaterThan(0);
-    // Must reference 30 free voices
-    expect(WELCOME).toMatch(/30/);
+    // Must contain placeholder for trial remaining count
+    expect(WELCOME).toContain('{TRIAL_REMAINING}');
   });
 
   it('should export NON_VOICE_EXPLANATION message', () => {

@@ -130,7 +130,9 @@ describe('bot handlers', () => {
   it('should reply with welcome message on /start', async () => {
     await bot.handleUpdate(makeStartUpdate());
     expect(repliedTexts.length).toBe(1);
+    // trial_remaining from mock is 30; placeholder {TRIAL_REMAINING} should be replaced
     expect(repliedTexts[0]).toContain('30');
+    expect(repliedTexts[0]).not.toContain('{TRIAL_REMAINING}');
   });
 
   it('should reply with explanation on text message', async () => {

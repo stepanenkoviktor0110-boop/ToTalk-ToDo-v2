@@ -44,43 +44,23 @@ export function createBot(token, options = {}) {
 
   // /start command handler — upsert user and send welcome
   bot.command('start', async (ctx) => {
+    if (!ctx.from) return;
     const telegramUserId = ctx.from.id;
     const telegramUsername = ctx.from.username || null;
     const user = upsertUser(telegramUserId, telegramUsername);
     const remaining = user.trial_remaining;
-    const welcomeText = WELCOME.replace('30', String(remaining));
+    const welcomeText = WELCOME.replace('{TRIAL_REMAINING}', String(remaining));
     await ctx.reply(welcomeText);
   });
 
-  // Non-voice message handler — text, photo, sticker, etc.
-  // Must NOT catch voice messages (those are handled in Task 6).
-  bot.on('message:text', async (ctx) => {
-    // Skip if it's a command (already handled above)
-    if (ctx.message.text.startsWith('/')) return;
-    await ctx.reply(NON_VOICE_EXPLANATION);
-  });
-  bot.on('message:photo', async (ctx) => {
-    await ctx.reply(NON_VOICE_EXPLANATION);
-  });
-  bot.on('message:sticker', async (ctx) => {
-    await ctx.reply(NON_VOICE_EXPLANATION);
-  });
-  bot.on('message:document', async (ctx) => {
-    await ctx.reply(NON_VOICE_EXPLANATION);
-  });
-  bot.on('message:video', async (ctx) => {
-    await ctx.reply(NON_VOICE_EXPLANATION);
-  });
-  bot.on('message:animation', async (ctx) => {
-    await ctx.reply(NON_VOICE_EXPLANATION);
-  });
-  bot.on('message:audio', async (ctx) => {
-    await ctx.reply(NON_VOICE_EXPLANATION);
-  });
-  bot.on('message:location', async (ctx) => {
-    await ctx.reply(NON_VOICE_EXPLANATION);
-  });
-  bot.on('message:contact', async (ctx) => {
+  // Non-voice message catch-all — covers text, photo, sticker, and every
+  // other message type except voice (handled in Task 6).
+  // Single handler avoids DRY violations and silently-unhandled new types.
+  bot.on('message', async (ctx) => {
+    // Skip voice messages — they will be handled by Task 6
+    if (ctx.message.voice) return;
+    // Skip commands (already handled above)
+    if (ctx.message.text && ctx.message.text.startsWith('/')) return;
     await ctx.reply(NON_VOICE_EXPLANATION);
   });
 
@@ -93,8 +73,9 @@ export function createBot(token, options = {}) {
     const errorUrl = err.error?.url ? sanitize(err.error.url) : '';
 
     // Decision 12: log with timestamp, no PII/credentials
+    const stackTrace = sanitize(err.error?.stack || err.stack || '');
     console.error(
-      `[${timestamp}] Error in chat ${chatId}: ${errorMessage}${errorUrl ? ` URL: ${errorUrl}` : ''}`
+      `[${timestamp}] Error in chat ${chatId}: ${errorMessage}${errorUrl ? ` URL: ${errorUrl}` : ''}${stackTrace ? `\n${stackTrace}` : ''}`
     );
 
     // Try to notify user — but don't crash if reply fails
@@ -120,6 +101,14 @@ async function main() {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) {
     console.error('TELEGRAM_BOT_TOKEN environment variable is not set.');
+    process.exit(1);
+  }
+
+  // SSRF protection: validate WHISPER_URL is a loopback address
+  const whisperUrl = process.env.WHISPER_URL ?? 'http://localhost:8765';
+  const { hostname } = new URL(whisperUrl);
+  if (hostname !== 'localhost' && hostname !== '127.0.0.1' && hostname !== '::1') {
+    console.error(`WHISPER_URL hostname '${hostname}' is not a loopback address. Aborting.`);
     process.exit(1);
   }
 
