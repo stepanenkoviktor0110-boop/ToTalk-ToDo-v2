@@ -40,6 +40,10 @@ function parseResponse(response) {
   if (trimmed.startsWith('__TOO_MANY_TASKS__')) {
     return { tasks: [], marker: 'too_many_tasks' };
   }
+  if (trimmed.startsWith('__SUMMARY__')) {
+    const summary = trimmed.slice('__SUMMARY__'.length).trim();
+    return { tasks: [], marker: 'summary', summary };
+  }
 
   // Try to parse as numbered list: lines matching "N. Text"
   const taskRegex = /^\s*\d+\.\s+(.+)$/gm;

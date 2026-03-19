@@ -289,6 +289,10 @@ export async function processVoiceBatch(ctx, voices, deps) {
     await ctx.reply(TOO_MANY_TASKS);
     return;
   }
+  if (result.marker === 'summary') {
+    await ctx.reply(`📝 ${result.summary}`);
+    return;
+  }
   if (result.tasks.length === 0) {
     await ctx.reply(NO_TASKS_FOUND);
     return;
