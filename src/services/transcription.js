@@ -5,7 +5,8 @@
  * to enable clean unit testing without module mocking.
  */
 
-const DEFAULT_WHISPER_URL = 'http://localhost:8765/transcribe';
+const DEFAULT_WHISPER_URL = 'http://localhost:8765/v1/audio/transcriptions';
+const DEFAULT_WHISPER_MODEL = 'Systran/faster-whisper-small';
 const DEFAULT_TIMEOUT_MS = 20_000;
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
@@ -74,6 +75,7 @@ export function createTranscriber(opts = {}) {
     const form = new FD();
     const blob = new BlobImpl([audioBuffer]);
     form.append('file', blob, filename);
+    form.append('model', process.env.WHISPER_MODEL ?? DEFAULT_WHISPER_MODEL);
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);

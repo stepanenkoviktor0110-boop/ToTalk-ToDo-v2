@@ -41,7 +41,7 @@ describe('transcription service', () => {
     const audioBuffer = Buffer.from('fake-audio-data');
     await transcribe(audioBuffer, 'test.ogg');
 
-    expect(capturedUrl).toBe('http://localhost:8765/transcribe');
+    expect(capturedUrl).toBe('http://localhost:8765/v1/audio/transcriptions');
     expect(capturedOpts.method).toBe('POST');
     // Body should be a FormData instance (duck-type check)
     expect(capturedOpts.body).toBeDefined();
