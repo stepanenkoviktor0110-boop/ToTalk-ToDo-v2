@@ -1,4 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
+import {
+  TRIAL_EXHAUSTED,
+  NO_TASKS_FOUND,
+  TOO_MANY_TASKS,
+  ALL_VOICES_FAILED,
+  BATCH_LIMIT_NOTE,
+  TRANSCRIPT_TRUNCATED_NOTE,
+  partialFailureNote,
+} from '../src/utils/messages.js';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -10,10 +19,11 @@ function makeCtx({
   fileId = 'voice_file_1',
   duration = 10,
   session = {},
+  hasFrom = true,
 } = {}) {
   const ctx = {
     chat: { id: chatId },
-    from: { id: userId, username },
+    from: hasFrom ? { id: userId, username } : undefined,
     message: {
       voice: { file_id: fileId, file_unique_id: 'u1', duration },
     },
@@ -36,6 +46,15 @@ function makeCtx({
   return ctx;
 }
 
+/** Minimal audio-message context (no voice, has audio) */
+function makeAudioCtx(overrides = {}) {
+  const ctx = makeCtx(overrides);
+  ctx.message = {
+    audio: { file_id: overrides.fileId || 'audio_file_1', file_unique_id: 'a1', duration: overrides.duration || 10 },
+  };
+  return ctx;
+}
+
 /** Default dependency bag */
 function makeDeps({
   transcribeResult = 'купить молоко и хлеб',
@@ -52,12 +71,13 @@ function makeDeps({
     updateVoiceRequest: jest.fn(),
     decrementTrial: jest.fn().mockReturnValue(user.trial_remaining - 1),
     botToken: 'test-token',
+    llmProvider: { complete: jest.fn().mockResolvedValue('1. Task one') },
   };
 }
 
 // ── import module under test ─────────────────────────────────────────────────
 
-const { handleVoice, processVoiceBatch, debounceBuffers, clearBuffers } =
+const { handleVoice, processVoiceBatch, clearBuffers, hasBuffer, getBufferSize } =
   await import('../src/handlers/voice.js');
 
 // ── tests ────────────────────────────────────────────────────────────────────
@@ -95,6 +115,8 @@ describe('voice handler', () => {
       expect(replyCall).toBeDefined();
       expect(replyCall[0]).toContain('1.');
       expect(replyCall[0]).toContain('2.');
+      expect(replyCall[0]).toContain('Купить молоко');
+      expect(replyCall[0]).toContain('Купить хлеб');
     });
 
     it('sends inline rating keyboard after task list', async () => {
@@ -134,6 +156,9 @@ describe('voice handler', () => {
         taskCount: 2,
         transcriptLength: expect.any(Number),
       });
+      // Session updated for feedback flow
+      expect(ctx.session.awaitingFeedback).toBe(true);
+      expect(ctx.session.voiceRequestId).toBe(10);
     });
 
     it('decrements trial counter on success', async () => {
@@ -158,6 +183,105 @@ describe('voice handler', () => {
 
       expect(deps.decrementTrial).not.toHaveBeenCalled();
     });
+
+    it('handles audio messages (message:audio)', async () => {
+      const ctx = makeAudioCtx({ fileId: 'audio_file_1' });
+      const deps = makeDeps();
+
+      handleVoice(ctx, deps);
+      jest.advanceTimersByTime(3000);
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(deps.fetchFile).toHaveBeenCalled();
+      expect(deps.transcribe).toHaveBeenCalled();
+      expect(ctx.reply).toHaveBeenCalled();
+    });
+
+    it('sends no-tasks message when extractTasks returns no_tasks marker', async () => {
+      const deps = makeDeps({
+        extractResult: { tasks: [], marker: 'no_tasks', truncated: false },
+      });
+      const ctx = makeCtx();
+
+      handleVoice(ctx, deps);
+      jest.advanceTimersByTime(3000);
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(ctx.reply).toHaveBeenCalledWith(NO_TASKS_FOUND);
+      expect(deps.decrementTrial).not.toHaveBeenCalled();
+    });
+
+    it('sends split message when extractTasks returns too_many_tasks marker', async () => {
+      const deps = makeDeps({
+        extractResult: { tasks: [], marker: 'too_many_tasks', truncated: false },
+      });
+      const ctx = makeCtx();
+
+      handleVoice(ctx, deps);
+      jest.advanceTimersByTime(3000);
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(ctx.reply).toHaveBeenCalledWith(TOO_MANY_TASKS);
+      expect(deps.decrementTrial).not.toHaveBeenCalled();
+    });
+
+    it('ignores voice message with no ctx.from (channel posts)', async () => {
+      const ctx = makeCtx({ hasFrom: false });
+      const deps = makeDeps();
+      const spy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+      handleVoice(ctx, deps);
+      jest.advanceTimersByTime(3000);
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(deps.transcribe).not.toHaveBeenCalled();
+      expect(ctx.reply).not.toHaveBeenCalled();
+      spy.mockRestore();
+    });
+  });
+
+  // ── credential sanitization ───────────────────────────────────────────────
+
+  describe('credential sanitization', () => {
+    it('does not log bot token on fetchFile error', async () => {
+      const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      const TOKEN = 'secret-bot-token-12345';
+      const deps = makeDeps();
+      deps.botToken = TOKEN;
+      deps.fetchFile.mockRejectedValue(
+        new Error(`GET https://api.telegram.org/file/bot${TOKEN}/voice/x.oga failed`)
+      );
+      const ctx = makeCtx();
+
+      handleVoice(ctx, deps);
+      jest.advanceTimersByTime(3000);
+      await jest.advanceTimersByTimeAsync(0);
+
+      for (const call of spy.mock.calls) {
+        expect(call.join(' ')).not.toContain(TOKEN);
+      }
+      spy.mockRestore();
+    });
+
+    it('does not log bot token on transcription error', async () => {
+      const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      const TOKEN = 'secret-bot-token-67890';
+      const deps = makeDeps();
+      deps.botToken = TOKEN;
+      deps.transcribe.mockRejectedValue(
+        new Error(`Request to https://api.telegram.org/file/bot${TOKEN}/path failed`)
+      );
+      const ctx = makeCtx();
+
+      handleVoice(ctx, deps);
+      jest.advanceTimersByTime(3000);
+      await jest.advanceTimersByTimeAsync(0);
+
+      for (const call of spy.mock.calls) {
+        expect(call.join(' ')).not.toContain(TOKEN);
+      }
+      spy.mockRestore();
+    });
   });
 
   // ── debounce buffer ──────────────────────────────────────────────────────
@@ -169,8 +293,8 @@ describe('voice handler', () => {
 
       handleVoice(ctx, deps);
 
-      expect(debounceBuffers.has(100)).toBe(true);
-      expect(debounceBuffers.get(100).voices.length).toBe(1);
+      expect(hasBuffer(100)).toBe(true);
+      expect(getBufferSize(100)).toBe(1);
       // Timer should not have fired yet
       expect(deps.transcribe).not.toHaveBeenCalled();
     });
@@ -184,7 +308,7 @@ describe('voice handler', () => {
       jest.advanceTimersByTime(2000); // 2s in
       handleVoice(ctx2, deps);
 
-      expect(debounceBuffers.get(100).voices.length).toBe(2);
+      expect(getBufferSize(100)).toBe(2);
 
       // At 3s from start (1s after second voice), should NOT have fired
       jest.advanceTimersByTime(1000);
@@ -216,10 +340,10 @@ describe('voice handler', () => {
 
       // Transcribe called twice (once per voice)
       expect(deps.transcribe).toHaveBeenCalledTimes(2);
-      // extractTasks called once with combined transcripts array
+      // extractTasks called once with combined transcript string
       expect(deps.extractTasks).toHaveBeenCalledTimes(1);
-      const transcriptsArg = deps.extractTasks.mock.calls[0][0];
-      expect(transcriptsArg).toEqual(['part one', 'part two']);
+      // Should reply
+      expect(ctx1.reply).toHaveBeenCalled();
     });
 
     it('voice after timer fires starts new buffer', async () => {
@@ -236,16 +360,18 @@ describe('voice handler', () => {
 
       // New voice after timer — should start fresh buffer
       handleVoice(ctx2, deps);
-      expect(debounceBuffers.has(100)).toBe(true);
-      expect(debounceBuffers.get(100).voices.length).toBe(1);
+      expect(hasBuffer(100)).toBe(true);
+      expect(getBufferSize(100)).toBe(1);
     });
 
     it('batch limit 10 enforced', async () => {
       const deps = makeDeps();
 
-      // Send 12 voices
+      // Send 12 voices — all share the same chatId so they share the buffer
+      const ctxs = [];
       for (let i = 0; i < 12; i++) {
         const ctx = makeCtx({ fileId: `v${i}` });
+        ctxs.push(ctx);
         handleVoice(ctx, deps);
       }
 
@@ -254,9 +380,9 @@ describe('voice handler', () => {
 
       // Only 10 should be transcribed
       expect(deps.transcribe).toHaveBeenCalledTimes(10);
-      // User should be notified about the limit
-      const lastCtx = makeCtx(); // any ctx from same chat
-      // The reply mock is shared across all ctx objects, check any
+      // User should be notified about the limit (reply on the replyCtx = ctxs[0])
+      const replies = ctxs[0].reply.mock.calls.map((c) => c[0]).join(' ');
+      expect(replies).toContain(BATCH_LIMIT_NOTE);
     });
   });
 
@@ -265,6 +391,7 @@ describe('voice handler', () => {
   describe('partial failure', () => {
     it('one of three voices fails transcription', async () => {
       const deps = makeDeps();
+      const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
       let callCount = 0;
       deps.transcribe.mockImplementation(() => {
         callCount++;
@@ -280,12 +407,15 @@ describe('voice handler', () => {
 
       // extractTasks called with 2 successful transcripts
       expect(deps.extractTasks).toHaveBeenCalledTimes(1);
-      const transcriptsArg = deps.extractTasks.mock.calls[0][0];
-      expect(transcriptsArg.length).toBe(2);
+      // Reply should contain partial failure note
+      const replies = ctxs[0].reply.mock.calls.map((c) => c[0]).join(' ');
+      expect(replies).toContain('1 из 3');
+      spy.mockRestore();
     });
 
     it('all voices fail', async () => {
       const deps = makeDeps();
+      const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
       deps.transcribe.mockRejectedValue(new Error('whisper error'));
 
       const ctxs = [1, 2, 3].map((i) => makeCtx({ fileId: `v${i}` }));
@@ -296,23 +426,39 @@ describe('voice handler', () => {
 
       expect(deps.extractTasks).not.toHaveBeenCalled();
       expect(deps.decrementTrial).not.toHaveBeenCalled();
+      // User should receive the all-voices-failed message
+      expect(ctxs[0].reply).toHaveBeenCalledWith(ALL_VOICES_FAILED);
+      spy.mockRestore();
+    });
+
+    it('fetchFile failure treated as failed voice', async () => {
+      const deps = makeDeps();
+      const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      deps.fetchFile.mockRejectedValue(new Error('network error'));
+
+      const ctx = makeCtx();
+      handleVoice(ctx, deps);
+      jest.advanceTimersByTime(3000);
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(deps.extractTasks).not.toHaveBeenCalled();
+      expect(deps.decrementTrial).not.toHaveBeenCalled();
+      expect(ctx.reply).toHaveBeenCalledWith(ALL_VOICES_FAILED);
+      spy.mockRestore();
     });
   });
 
   // ── transcript truncation ────────────────────────────────────────────────
 
   describe('transcript truncation', () => {
-    it('combined transcript over 4000 chars truncated', async () => {
+    it('combined transcript over 4000 chars truncated by handler', async () => {
       const deps = makeDeps();
-      // extractTasks receives truncated input indicated by truncated flag from extractTasks itself
-      // Here we test that extractTasks is called with the transcript array
       const longText = 'a'.repeat(5000);
       deps.transcribe.mockResolvedValue(longText);
-      // extractTasks mock returns truncated: true when transcript is long
       deps.extractTasks.mockResolvedValue({
         tasks: ['Task 1'],
         marker: null,
-        truncated: true,
+        truncated: false,
       });
 
       const ctx = makeCtx();
@@ -321,6 +467,10 @@ describe('voice handler', () => {
       await jest.advanceTimersByTimeAsync(0);
 
       expect(deps.extractTasks).toHaveBeenCalled();
+      // Handler should truncate the combined transcript to 4000 chars before calling extractTasks
+      const arg = deps.extractTasks.mock.calls[0][0];
+      const combined = typeof arg === 'string' ? arg : (Array.isArray(arg) ? arg.join('\n') : '');
+      expect(combined.length).toBeLessThanOrEqual(4000);
       // Reply should contain truncation note
       const replies = ctx.reply.mock.calls.map((c) => c[0]).join(' ');
       expect(replies).toMatch(/сокращён|обрезан|truncat/i);
@@ -341,8 +491,9 @@ describe('voice handler', () => {
 
       expect(deps.transcribe).not.toHaveBeenCalled();
       expect(deps.extractTasks).not.toHaveBeenCalled();
-      // User should get a message about exhausted trial
-      expect(ctx.reply).toHaveBeenCalled();
+      expect(deps.decrementTrial).not.toHaveBeenCalled();
+      // User should get the specific trial-exhausted message
+      expect(ctx.reply).toHaveBeenCalledWith(TRIAL_EXHAUSTED);
     });
   });
 

@@ -8,6 +8,7 @@
  * partial failure handling, and trial enforcement.
  */
 
+import { basename } from 'node:path';
 import { InlineKeyboard } from 'grammy';
 import {
   TRIAL_EXHAUSTED,
@@ -23,6 +24,7 @@ import {
 
 const DEBOUNCE_MS = 3000;
 const MAX_BATCH_SIZE = 10;
+const MAX_TRANSCRIPT_LENGTH = 4000;
 
 /**
  * Per-chat debounce buffer.
@@ -30,7 +32,7 @@ const MAX_BATCH_SIZE = 10;
  * Value: { voices: Array<{ ctx, fileId, duration }>, timer: ReturnType<setTimeout>, deps }
  * @type {Map<number, { voices: Array, timer: any, deps: object }>}
  */
-export const debounceBuffers = new Map();
+const debounceBuffers = new Map();
 
 /** Clear all buffers (for test cleanup). */
 export function clearBuffers() {
@@ -38,6 +40,28 @@ export function clearBuffers() {
     if (entry.timer) clearTimeout(entry.timer);
   }
   debounceBuffers.clear();
+}
+
+/** Return current buffer size for a chat (test inspector). */
+export function getBufferSize(chatId) {
+  const entry = debounceBuffers.get(chatId);
+  return entry ? entry.voices.length : 0;
+}
+
+/** Check whether a buffer exists for a chat. */
+export function hasBuffer(chatId) {
+  return debounceBuffers.has(chatId);
+}
+
+/**
+ * Sanitize a string by removing bot tokens from Telegram API URLs.
+ * Decision 16: credential sanitization in error handlers.
+ * @param {string} str
+ * @returns {string}
+ */
+function sanitize(str) {
+  if (typeof str !== 'string') return str;
+  return str.replace(/\/bot[^/]+\//g, '/bot[REDACTED]/');
 }
 
 /**
@@ -51,7 +75,8 @@ export function clearBuffers() {
  */
 export function handleVoice(ctx, deps) {
   const chatId = ctx.chat.id;
-  const voice = ctx.message.voice;
+  const voice = ctx.message.voice ?? ctx.message.audio;
+  if (!voice) return;
   const fileId = voice.file_id;
   const duration = voice.duration || 0;
 
@@ -98,31 +123,116 @@ function onTimerFire(chatId) {
   // Fire and forget — errors are handled inside processVoiceBatch
   processVoiceBatch(entry.replyCtx, entry.voices, entry.deps).catch((err) => {
     const ts = new Date().toISOString();
-    console.error(`[${ts}] processVoiceBatch unexpected error: chatId=${chatId}, error=${err.message}`);
+    console.error(`[${ts}] processVoiceBatch unexpected error: chatId=${chatId}, error=${sanitize(err.message)}`);
   });
+}
+
+/**
+ * Download and transcribe each voice in the batch.
+ *
+ * @param {Array<{ ctx: object, fileId: string, duration: number }>} processVoices
+ * @param {object} deps - injected dependencies
+ * @param {number} chatId - for logging
+ * @returns {Promise<{ transcripts: string[], failedCount: number, successfulVoices: Array }>}
+ */
+async function downloadAndTranscribe(processVoices, deps, chatId) {
+  const { transcribe, fetchFile, botToken } = deps;
+  const transcripts = [];
+  let failedCount = 0;
+  const successfulVoices = [];
+
+  for (let i = 0; i < processVoices.length; i++) {
+    const v = processVoices[i];
+    try {
+      const fileInfo = await v.ctx.api.getFile(v.fileId);
+      const filePath = fileInfo.file_path;
+      const audioBuffer = await fetchFile(botToken, filePath);
+      // Sanitize filename from Telegram (defense-in-depth)
+      const safeFilename = basename(filePath).replace(/[^a-zA-Z0-9._-]/g, '_') || 'audio.oga';
+      const transcript = await transcribe(audioBuffer, safeFilename);
+      transcripts.push(transcript);
+      successfulVoices.push(v);
+    } catch (err) {
+      failedCount++;
+      const ts = new Date().toISOString();
+      // Decision 12: log metadata only, no transcript/PII/fileId
+      console.error(
+        `[${ts}] voice transcription failed: chatId=${chatId}, voiceIndex=${i}, error=${sanitize(err.message)}`
+      );
+    }
+  }
+
+  return { transcripts, failedCount, successfulVoices };
+}
+
+/**
+ * Build the reply message from extraction result and notes.
+ *
+ * @param {{ tasks: string[], truncated: boolean }} result
+ * @param {number} failedCount
+ * @param {number} totalCount
+ * @param {boolean} batchLimitExceeded
+ * @returns {string}
+ */
+function buildReplyMessage(result, failedCount, totalCount, batchLimitExceeded) {
+  let message = formatTaskList(result.tasks);
+
+  if (result.truncated) {
+    message += TRANSCRIPT_TRUNCATED_NOTE;
+  }
+  if (failedCount > 0) {
+    message += partialFailureNote(failedCount, totalCount);
+  }
+  if (batchLimitExceeded) {
+    message += '\n\n' + BATCH_LIMIT_NOTE;
+  }
+
+  return message;
+}
+
+/**
+ * Persist batch results to the database.
+ *
+ * @param {{ id: number }} user
+ * @param {Array} successfulVoices
+ * @param {{ tasks: string[] }} result
+ * @param {string} combinedTranscript
+ * @param {object} deps
+ * @returns {number|null} lastVoiceRequestId
+ */
+function persistBatch(user, successfulVoices, result, combinedTranscript, deps) {
+  const { createVoiceRequest, updateVoiceRequest } = deps;
+  let lastVoiceRequestId = null;
+
+  for (const v of successfulVoices) {
+    const vr = createVoiceRequest(user.id, v.fileId, v.duration);
+    updateVoiceRequest(vr.id, {
+      taskCount: result.tasks.length,
+      transcriptLength: combinedTranscript.length,
+    });
+    lastVoiceRequestId = vr.id;
+  }
+
+  return lastVoiceRequestId;
 }
 
 /**
  * Process a batch of voice messages.
  *
- * Pipeline: trial check → download → transcribe → extract → format → send → DB
+ * Pipeline: trial check → download → transcribe → truncate → extract → format → send → DB
  *
  * @param {object} ctx - grammy context (used for reply and session)
  * @param {Array<{ ctx: object, fileId: string, duration: number }>} voices
  * @param {object} deps - injected dependencies
  */
 export async function processVoiceBatch(ctx, voices, deps) {
-  const {
-    transcribe,
-    extractTasks,
-    fetchFile,
-    upsertUser,
-    getUserByTelegramId,
-    createVoiceRequest,
-    updateVoiceRequest,
-    decrementTrial,
-    botToken,
-  } = deps;
+  const { extractTasks, upsertUser, decrementTrial } = deps;
+
+  // Guard: channel posts may have no ctx.from
+  if (!ctx.from) {
+    console.warn(`[${new Date().toISOString()}] voice message with no ctx.from (chatId=${ctx.chat?.id}), ignoring`);
+    return;
+  }
 
   const userId = ctx.from.id;
   const username = ctx.from.username || null;
@@ -143,27 +253,8 @@ export async function processVoiceBatch(ctx, voices, deps) {
   }
 
   // Download and transcribe each voice
-  const transcripts = [];
-  let failedCount = 0;
-  const successfulVoices = [];
-
-  for (const v of processVoices) {
-    try {
-      const fileInfo = await v.ctx.api.getFile(v.fileId);
-      const filePath = fileInfo.file_path;
-      const audioBuffer = await fetchFile(botToken, filePath);
-      const transcript = await transcribe(audioBuffer, filePath);
-      transcripts.push(transcript);
-      successfulVoices.push(v);
-    } catch (err) {
-      failedCount++;
-      const ts = new Date().toISOString();
-      // Decision 12: log metadata only, no transcript/PII
-      console.error(
-        `[${ts}] voice transcription failed: chatId=${ctx.chat.id}, fileId=${v.fileId}, error=${err.message}`
-      );
-    }
-  }
+  const { transcripts, failedCount, successfulVoices } =
+    await downloadAndTranscribe(processVoices, deps, ctx.chat.id);
 
   // All voices failed
   if (transcripts.length === 0) {
@@ -171,15 +262,29 @@ export async function processVoiceBatch(ctx, voices, deps) {
     return;
   }
 
-  // Extract tasks from combined transcripts
+  // Truncate combined transcript before sending to LLM (Decision 4)
+  let combinedTranscript = transcripts.join('\n');
+  let truncatedByHandler = false;
+  if (combinedTranscript.length > MAX_TRANSCRIPT_LENGTH) {
+    combinedTranscript = combinedTranscript.slice(0, MAX_TRANSCRIPT_LENGTH);
+    truncatedByHandler = true;
+  }
+
+  // Extract tasks from truncated combined transcript
   let result;
   try {
-    result = await extractTasks(transcripts, deps.llmProvider);
+    result = await extractTasks(combinedTranscript, deps.llmProvider);
   } catch (err) {
     const ts = new Date().toISOString();
-    console.error(`[${ts}] task extraction failed: chatId=${ctx.chat.id}, error=${err.message}`);
+    // Decision 12: generic error type only, no transcript/PII in logs
+    console.error(`[${ts}] task extraction failed: chatId=${ctx.chat.id}, errorType=${err.constructor.name}`);
     await ctx.reply(GENERIC_ERROR);
     return;
+  }
+
+  // Merge truncation flags (handler or extractor may set it)
+  if (truncatedByHandler) {
+    result = { ...result, truncated: true };
   }
 
   // Handle special markers
@@ -196,45 +301,15 @@ export async function processVoiceBatch(ctx, voices, deps) {
     return;
   }
 
-  // Format task list
-  let message = formatTaskList(result.tasks);
-
-  // Append notes
-  if (result.truncated) {
-    message += TRANSCRIPT_TRUNCATED_NOTE;
-  }
-  if (failedCount > 0) {
-    message += partialFailureNote(failedCount, processVoices.length);
-  }
-  if (batchLimitExceeded) {
-    message += '\n\n' + BATCH_LIMIT_NOTE;
-  }
-
-  // Build rating keyboard
+  // Build reply, send with rating keyboard, persist to DB
+  const message = buildReplyMessage(result, failedCount, processVoices.length, batchLimitExceeded);
   const keyboard = new InlineKeyboard()
-    .text('1', 'rate:1')
-    .text('2', 'rate:2')
-    .text('3', 'rate:3')
-    .text('4', 'rate:4')
-    .text('5', 'rate:5');
+    .text('1', 'rate:1').text('2', 'rate:2').text('3', 'rate:3')
+    .text('4', 'rate:4').text('5', 'rate:5');
 
-  // Send task list with rating buttons
   await ctx.reply(message, { reply_markup: keyboard });
 
-  // Record in DB
-  const combinedTranscript = transcripts.join('\n');
-  let lastVoiceRequestId = null;
-
-  for (const v of successfulVoices) {
-    const vr = createVoiceRequest(user.id, v.fileId, v.duration);
-    updateVoiceRequest(vr.id, {
-      taskCount: result.tasks.length,
-      transcriptLength: combinedTranscript.length,
-    });
-    lastVoiceRequestId = vr.id;
-  }
-
-  // Decrement trial once for the whole batch
+  const lastVoiceRequestId = persistBatch(user, successfulVoices, result, combinedTranscript, deps);
   decrementTrial(user.id);
 
   // Set session state for feedback flow (Task 7)
@@ -250,4 +325,5 @@ export async function processVoiceBatch(ctx, voices, deps) {
  */
 export function registerVoiceHandler(bot, deps) {
   bot.on('message:voice', (ctx) => handleVoice(ctx, deps));
+  bot.on('message:audio', (ctx) => handleVoice(ctx, deps));
 }
