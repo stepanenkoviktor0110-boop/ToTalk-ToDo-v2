@@ -33,11 +33,11 @@ function getSystemPrompt() {
 function parseResponse(response) {
   const trimmed = response.trim();
 
-  // Check for markers (with tolerance for surrounding whitespace)
-  if (trimmed.includes('__NO_TASKS__')) {
+  // Check for markers — anchored to start to resist prompt injection
+  if (trimmed.startsWith('__NO_TASKS__')) {
     return { tasks: [], marker: 'no_tasks' };
   }
-  if (trimmed.includes('__TOO_MANY_TASKS__')) {
+  if (trimmed.startsWith('__TOO_MANY_TASKS__')) {
     return { tasks: [], marker: 'too_many_tasks' };
   }
 
@@ -56,7 +56,8 @@ function parseResponse(response) {
     return { tasks, marker: null };
   }
 
-  // No recognized format
+  // No recognized format — log for audit trail (Decision 12: timestamps, Decision 16: no PII)
+  console.error(`[${new Date().toISOString()}] taskExtractor: unexpected LLM response format, length=${trimmed.length}`);
   return { tasks: [], marker: null, error: 'format_error' };
 }
 
