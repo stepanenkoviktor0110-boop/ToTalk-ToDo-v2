@@ -34,7 +34,10 @@ No routes or HTTP server — the bot uses Telegram long polling exclusively.
 - `first_seen_at` DATETIME NOT NULL
 - `last_active_at` DATETIME NOT NULL
 - `total_voice_count` INTEGER DEFAULT 0
-- `trial_remaining` INTEGER DEFAULT 50 — starts at 30 (first phase) + 20 (second phase)
+- `trial_remaining` INTEGER DEFAULT 30
+- `trial_phase` INTEGER DEFAULT 1 — 1 = first 30, 2 = bonus 20 (after survey), 3 = exhausted
+- `survey_progress` INTEGER DEFAULT 0 — 0-4, which survey question user is on
+- `survey_blocked` INTEGER DEFAULT 0 — 1 if user gave garbage answers
 
 **`voice_requests`**
 - `id` INTEGER PRIMARY KEY AUTOINCREMENT
@@ -42,6 +45,7 @@ No routes or HTTP server — the bot uses Telegram long polling exclusively.
 - `telegram_file_id` TEXT NOT NULL
 - `duration_seconds` INTEGER
 - `task_count` INTEGER
+- `transcript_length` INTEGER
 - `audio_path` TEXT — NULL unless user consents (per-message consent)
 - `created_at` DATETIME NOT NULL
 
@@ -53,11 +57,21 @@ No routes or HTTP server — the bot uses Telegram long polling exclusively.
 - `voice_consent` INTEGER NOT NULL — 0/1 boolean; only asked when rating < 5
 - `created_at` DATETIME NOT NULL
 
+**`survey_responses`**
+- `id` INTEGER PRIMARY KEY AUTOINCREMENT
+- `user_id` INTEGER NOT NULL → FK `users.id`
+- `question_num` INTEGER NOT NULL
+- `answer` TEXT NOT NULL
+- `is_adequate` INTEGER DEFAULT 1
+- `rejection_reason` TEXT — LLM sanity check reason when rejected
+- `created_at` DATETIME NOT NULL
+
 ### Trial System Logic
 
-- `trial_remaining` decrements on each processed voice.
-- At 30 uses total: trigger feedback report request (milestone message to user).
-- At 50 uses total: trial ends, user gets "upgrade" prompt (v2 monetization — not implemented in MVP, just show message).
+- `trial_remaining` decrements only on successful task list delivery (not on errors).
+- Phase 1: 30 free uses. When exhausted → survey triggers.
+- Phase 2: +20 uses after survey completion. When exhausted → phase 3 (blocked).
+- Survey: 4 questions, `survey_progress` (0-4) tracks position. 2-strike rejection per question. `survey_blocked=1` is permanent.
 - Query pattern: `db.prepare('UPDATE users SET trial_remaining = trial_remaining - 1 WHERE id = ?').run(userId)`.
 
 ---
@@ -87,7 +101,7 @@ No existing application code to reference. The `files/` directory contains origi
 - **Endpoint contract (to be confirmed):** `POST http://localhost:8765/transcribe` with multipart form data containing audio file
 - **Response:** JSON with `{ text: string, language: string }` (exact contract needs verification against running service)
 - **Env var:** `WHISPER_URL=http://localhost:8765`
-- **Client location:** `src/services/transcription.js` using `node-fetch` + `form-data`
+- **Client location:** `src/services/transcription.js` using `node-fetch` v3 built-in `FormData` (NOT `form-data` npm package)
 
 ### GigaChat API
 - **Auth:** OAuth2 client credentials flow
@@ -145,7 +159,7 @@ test('saves feedback rating', () => {
 
 Planned based on architecture:
 
-**`src/utils/telegram.js`** — All user-facing string constants and Telegram message helpers. Functions: `sendTaskList(ctx, tasks)`, `sendProcessingStatus(ctx)`, `sendError(ctx, type)`, `requestFeedback(ctx, voiceRequestId)`. All Russian-language strings defined here (single source of truth per UX guidelines).
+**`src/utils/messages.js`** — All user-facing string constants and Telegram message helpers. Functions: `sendTaskList(ctx, tasks)`, `sendProcessingStatus(ctx)`, `sendError(ctx, type)`, `requestFeedback(ctx, voiceRequestId)`. All Russian-language strings defined here (single source of truth per UX guidelines).
 
 **`src/db/index.js`** — SQLite connection singleton. Exports `db` instance (better-sqlite3 `Database` object). Also exports `runMigrations(db)`.
 
@@ -289,7 +303,7 @@ src/
     migrations/
       001_initial.sql            — create users, voice_requests, feedback tables
 utils/
-    telegram.js                  — message strings + send helpers
+    messages.js                  — message strings + send helpers
 prompts/
   task-extraction.md             — LLM system prompt (iterable without code changes)
 package.json                     — "type": "module", dependencies, jest config
