@@ -32,3 +32,18 @@ Review details — in JSON files via links. QA report — in logs/working/.
 - Manual check → OK
 
 -->
+
+## Task 3: System Prompt for Task Extraction
+
+**Status:** Done
+**Commit:** 23b3afe
+**Agent:** prompt-engineer
+**Summary:** Создан системный промпт `prompts/task-extraction.md` для извлечения задач из транскриптов голосовых сообщений. Промпт на русском языке, содержит правила очистки речевого мусора, разрешения трёх типов неопределённостей (неизвестный человек, альтернатива, делегирование), упорядочивания по зависимостям, защиту от prompt injection и 4 few-shot примера. Маркеры `__NO_TASKS__` и `__TOO_MANY_TASKS__` задокументированы в секции `<markers>` для интеграции с Task 5.
+**Deviations:** None
+
+**Reviews:**
+
+(pending prompt-reviewer)
+
+**Verification:**
+- Manual walkthrough of 5 sample inputs from task spec — all produce expected outputs
