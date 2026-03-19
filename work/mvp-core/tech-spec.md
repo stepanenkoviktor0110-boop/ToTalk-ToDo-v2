@@ -1,6 +1,6 @@
 ---
 created: 2026-03-19
-status: draft
+status: approved
 branch: feature/mvp-core
 size: L
 ---
