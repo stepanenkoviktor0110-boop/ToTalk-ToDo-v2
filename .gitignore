@@ -50,3 +50,7 @@ htmlcov/
 tmp/
 temp/
 *.tmp
+
+# Database (contains PII — Decision 20)
+data/
+*.db

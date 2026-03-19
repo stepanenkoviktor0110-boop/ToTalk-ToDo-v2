@@ -1,0 +1,42 @@
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  telegram_user_id INTEGER UNIQUE NOT NULL,
+  telegram_username TEXT,
+  first_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_active_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  total_voice_count INTEGER NOT NULL DEFAULT 0,
+  trial_remaining INTEGER NOT NULL DEFAULT 30,
+  trial_phase INTEGER NOT NULL DEFAULT 1,
+  survey_progress INTEGER NOT NULL DEFAULT 0,
+  survey_blocked INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS voice_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  telegram_file_id TEXT NOT NULL,
+  duration_seconds INTEGER,
+  task_count INTEGER,
+  transcript_length INTEGER,
+  audio_path TEXT,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS feedback (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  voice_request_id INTEGER NOT NULL REFERENCES voice_requests(id),
+  rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+  comment TEXT,
+  voice_consent INTEGER NOT NULL DEFAULT 0,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS survey_responses (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  question_num INTEGER NOT NULL,
+  answer TEXT NOT NULL,
+  is_adequate INTEGER NOT NULL DEFAULT 1,
+  rejection_reason TEXT,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
