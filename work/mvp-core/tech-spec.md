@@ -117,6 +117,21 @@ The system prompt is a separate markdown file iterable without code changes. Mul
 **Rationale:** Unhandled errors in handlers must not crash the bot. grammy provides built-in error boundary.
 **Alternatives considered:** process.on('uncaughtException') — grammy's catch is more specific and appropriate
 
+### Decision 14: HTTP timeout values for <30s target
+**Decision:** Transcription timeout: 20s. GigaChat timeout: 15s. Total pipeline budget: ~30s for voice up to 1 min. Timeouts configured via fetch AbortController.
+**Rationale:** User-spec requires <30s response. Splitting budget between services leaves margin for formatting and sending.
+**Alternatives considered:** No timeouts (risk of hanging requests), longer timeouts (violates 30s target)
+
+### Decision 15: Survey state machine rules
+**Decision:** Survey has 4 questions. `survey_progress` (0-4) tracks position. Each answer checked by LLM sanity check with 2-strike rule per question (tracked in session `surveyRetries`). `survey_blocked=1` is permanent — no retry. Phase transitions: phase 1 (30 free) → phase 2 (survey completed, +20) → phase 3 (exhausted, blocked). Survey abandoned mid-flow → resumes from `survey_progress` on next voice.
+**Rationale:** Centralizes complex state machine logic in one decision for clarity.
+**Alternatives considered:** Simpler flag-based system (insufficient for resumption and per-question retries)
+
+### Decision 16: Credential sanitization in error handlers
+**Decision:** All HTTP error handlers must sanitize URLs and headers before logging — strip bot token from Telegram URLs, strip Authorization headers from GigaChat requests. Unit test required: assert no credential substring appears in captured log output on simulated error.
+**Rationale:** Decision 12 prohibits credential logging, but without explicit sanitization in error paths, raw error objects leak credentials via `.url` and `.headers` properties.
+**Alternatives considered:** Wrapping console.log globally (fragile, easy to bypass)
+
 ## Data Models
 
 ### SQLite Schema
@@ -282,6 +297,9 @@ Technical acceptance criteria (complement user-spec criteria):
 - [ ] Feedback interruption: new voice resets session, previous feedback abandoned
 - [ ] Batch limit: max 10 voices per debounce window enforced
 - [ ] Output limit: max 10 tasks, user prompted to split if exceeded
+- [ ] HTTP timeouts: transcription 20s, GigaChat 15s (Decision 14)
+- [ ] Response time <30s for voice up to 1 min on VPS (single user load)
+- [ ] Credential sanitization: unit test asserts no token/key in log output on error
 
 ## Implementation Tasks
 
@@ -310,7 +328,7 @@ Technical acceptance criteria (complement user-spec criteria):
 - **Files to modify:** `prompts/task-extraction.md`
 - **Files to read:** `work/mvp-core/user-spec.md`, `.claude/skills/project-knowledge/references/patterns.md`
 
-### Wave 2 (depends on Wave 1 — Block 2: Core Pipeline)
+### Wave 2 (depends on Wave 1 — Block 2a: Bot + Services)
 
 #### Task 4: Bot Entry Point + Handler Skeleton
 - **Description:** Create grammy bot initialization with session middleware, /start handler with welcome message and trial info, non-voice message handler, and user auto-registration on first contact.
@@ -331,16 +349,19 @@ Technical acceptance criteria (complement user-spec criteria):
 - **Files to read:** `src/services/llm/provider.js`, `prompts/task-extraction.md`
 - **Depends on:** Task 2, Task 3
 
+### Wave 3 (depends on Wave 2 — Block 2b: Voice Handler)
+
 #### Task 6: Voice Handler + Multi-Voice Context
 - **Description:** Orchestrate full voice-to-tasks pipeline in the voice handler: download audio, transcribe, extract tasks, format output, send to user. Implement per-chat debounce buffer (3s) for multi-voice context merging with partial failure handling.
 - **Skill:** code-writing
 - **Reviewers:** code-reviewer, security-auditor, test-reviewer
+- **Verify-smoke:** `npm test -- --grep "voice handler"` → integration test passes
 - **Verify-user:** Forward a voice message to bot → check task list appears with rating buttons
 - **Files to modify:** `src/handlers/voice.js`
 - **Files to read:** `src/services/transcription.js`, `src/services/taskExtractor.js`, `src/utils/messages.js`, `src/db/queries.js`
 - **Depends on:** Task 4, Task 5
 
-### Wave 3 (depends on Wave 2 — Block 3a: Feedback)
+### Wave 4 (depends on Wave 3 — Block 3a: Feedback)
 
 #### Task 7: Feedback Flow + Voice Consent
 - **Description:** Handle inline keyboard callbacks for 1-5 ratings, text comment collection when rating <5, voice consent request with audio file saving. Session state tracks which voice_request_id to associate with feedback. New voice during pending feedback silently abandons previous feedback (Decision 9).
@@ -351,7 +372,7 @@ Technical acceptance criteria (complement user-spec criteria):
 - **Files to read:** `src/utils/messages.js`, `src/db/queries.js`
 - **Depends on:** Task 6
 
-### Wave 4 (depends on Wave 3 — Block 3b: Trial)
+### Wave 5 (depends on Wave 4 — Block 3b: Trial)
 
 #### Task 8: Trial System + Survey Form
 - **Description:** Enforce trial limits (30 free, +20 after survey). Implement sequential 4-question survey in chat with LLM sanity check (fail-open on LLM error, 2-strike rejection for garbage). Survey resumption on abandoned form. Counter increments only on successful task list delivery.
@@ -362,7 +383,7 @@ Technical acceptance criteria (complement user-spec criteria):
 - **Files to read:** `src/db/queries.js`, `src/services/llm/provider.js`, `src/utils/messages.js`
 - **Depends on:** Task 7
 
-### Wave 5 (depends on Wave 4 — Block 3c: UX Polish)
+### Wave 6 (depends on Wave 5 — Block 3c: UX Polish)
 
 #### Task 9: UX Polish + Error Handling + Logging
 - **Description:** Add processing status message (shown if >5s), long voice warning (>3min), global bot error handler (Decision 13), centralize all error messages (no technical details). Add console.log with timestamps for request metadata and errors — never log credentials or PII (Decision 12). Enforce batch limit of 10 voices and output limit of 10 tasks (Decision 10).
@@ -397,9 +418,9 @@ Technical acceptance criteria (complement user-spec criteria):
 - **Reviewers:** none
 
 #### Task 14: Deploy
-- **Description:** Deploy to VPS via SSH: git pull, npm install, configure .env, setup systemd service, verify bot starts and connects to Telegram.
+- **Description:** Deploy to VPS via SSH: git pull, npm install, configure .env, setup systemd service, verify bot starts and connects to Telegram. Verify firewall blocks port 8765 externally.
 - **Skill:** deploy-pipeline
-- **Reviewers:** none
+- **Reviewers:** code-reviewer, security-auditor, deploy-reviewer
 
 #### Task 15: Post-deploy Verification
 - **Description:** Live environment verification:

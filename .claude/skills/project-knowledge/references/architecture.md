@@ -81,21 +81,27 @@ User sends voice message in Telegram → bot downloads audio file via Telegram A
 
 ### Main Tables
 
+**users**
+- Purpose: User registry with usage statistics
+- Key fields: `id`, `telegram_user_id`, `telegram_username`, `first_seen_at`, `last_active_at`, `total_voice_count`, `trial_remaining`
+- Relationships: `users.id → voice_requests.user_id`
+
 **voice_requests**
-- Purpose: Log of processed voice messages for trial counting and analytics
-- Key fields: `id`, `telegram_user_id`, `duration_seconds`, `task_count`, `created_at`
-- Relationships: `voice_requests.id → feedback.voice_request_id`
+- Purpose: Log of processed voice messages for analytics and trial counting
+- Key fields: `id`, `user_id`, `telegram_file_id`, `duration_seconds`, `task_count`, `audio_path` (nullable, stored only with consent), `created_at`
+- Relationships: `voice_requests.user_id → users.id`, `voice_requests.id → feedback.voice_request_id`
 
 **feedback**
 - Purpose: User feedback after each voice message processing
-- Key fields: `id`, `voice_request_id`, `rating` (1-5), `comment` (nullable, requested when rating < 5), `created_at`
+- Key fields: `id`, `voice_request_id`, `rating` (1-5), `comment` (nullable, requested when rating < 5), `voice_consent` (boolean, whether user consented to voice review), `created_at`
 - Relationships: `feedback.voice_request_id → voice_requests.id`
 
 ### Key Constraints
 
-- **Required fields:** `voice_requests`: `telegram_user_id`, `created_at`. `feedback`: `voice_request_id`, `rating`.
+- **Required fields:** `users`: `telegram_user_id`, `first_seen_at`. `voice_requests`: `user_id`, `created_at`. `feedback`: `voice_request_id`, `rating`.
 - **Rating range:** `feedback.rating` CHECK (1-5)
-- **Foreign keys:** `feedback.voice_request_id → voice_requests.id`
+- **Foreign keys:** `voice_requests.user_id → users.id`, `feedback.voice_request_id → voice_requests.id`
+- **Unique constraints:** `users.telegram_user_id` must be unique
 
 ### Migration Strategy
 
@@ -105,4 +111,6 @@ User sends voice message in Telegram → bot downloads audio file via Telegram A
 ### Sensitive Data
 
 **PII fields:**
-- `voice_requests.telegram_user_id` — Telegram user identifier
+- `users.telegram_user_id` — Telegram user identifier
+- `users.telegram_username` — Telegram username
+- `voice_requests.audio_path` — Original voice file (stored only with explicit user consent, per-message)

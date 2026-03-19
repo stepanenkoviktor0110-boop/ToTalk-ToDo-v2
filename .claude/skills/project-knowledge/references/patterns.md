@@ -103,4 +103,6 @@ None configured yet.
 - Processing > 30 seconds → send intermediate status ("processing...")
 - Voice > 3 minutes → warn about longer processing time
 - Feedback: after each processed voice, ask rating 1-5. If rating < 5 → ask short comment. Store all feedback in SQLite.
+- Voice consent: when rating < 5, ask user for consent to listen to original voice for quality improvement. Consent is per-message (not blanket). If declined — voice data must not be stored or used. Ask each time separately.
+- User tracking: register every user on first interaction, track usage statistics (total messages, last active, trial remaining).
 - Trial: 30 free voice messages → request feedback report → 20 more free → then 10/day or packages (v2)

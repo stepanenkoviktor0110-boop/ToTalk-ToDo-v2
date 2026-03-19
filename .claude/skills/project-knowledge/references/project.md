@@ -36,6 +36,8 @@ Currently, when people dictate tasks or plans, they get either a raw transcript 
 - **Dependency ordering** — Arrange tasks logically (can't call someone whose number you don't know yet)
 - **Multi-voice context** — Multiple voice messages forwarded simultaneously are treated as a single context
 - **Feedback collection** — After each voice message, request 1-5 rating; if below 5, ask for a short comment
+- **User database & usage analytics** — Track all users, their usage statistics (message count, frequency, ratings)
+- **Voice consent for quality improvement** — When user gives low rating, ask consent to listen to original voice message for service improvement. Consent requested each time, no blanket permission. If declined — voice data must not be used.
 
 ---
 
