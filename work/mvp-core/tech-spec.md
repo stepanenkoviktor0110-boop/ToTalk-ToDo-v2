@@ -83,14 +83,39 @@ The system prompt is a separate markdown file iterable without code changes. Mul
 **Alternatives considered:** better-sqlite3 async wrapper, SQLite via knex (unnecessary complexity for MVP)
 
 ### Decision 7: node-fetch v3 for HTTP calls
-**Decision:** Use node-fetch v3 (ESM-native) for faster-whisper and GigaChat API calls
-**Rationale:** Consistent API, ESM support, handles multipart form data well
+**Decision:** Use node-fetch v3 (ESM-native) with its built-in FormData for faster-whisper and GigaChat API calls. Do NOT use `form-data` npm package — it is incompatible with node-fetch v3.
+**Rationale:** Consistent API, ESM support. node-fetch v3 deprecated the `form-data` package and ships its own spec-compliant FormData.
 **Alternatives considered:** Built-in Node.js fetch (available in v22 but less mature for multipart/form-data), undici (lower-level)
 
 ### Decision 8: Sberbank CA certificate handling
 **Decision:** Bundle Sberbank CA certificate and load via Node.js https agent options
 **Rationale:** `NODE_TLS_REJECT_UNAUTHORIZED=0` is a security risk even for MVP
 **Alternatives considered:** Disable TLS verification (insecure), proxy through nginx with cert (over-engineering)
+
+### Decision 9: Feedback interruption — silent abandon
+**Decision:** If user sends a new voice while feedback is pending (rating/comment/consent), silently abandon previous feedback and process the new voice. Reset session state.
+**Rationale:** Users should not be blocked. Forwarded voices are the primary use case — feedback is secondary.
+**Alternatives considered:** Force feedback completion before accepting new voice (blocks user flow)
+
+### Decision 10: Batch and output limits
+**Decision:** Max 10 voices per debounce buffer batch. Max 10 tasks in LLM output — if more, ask user to split. Zero tasks → explicit friendly message.
+**Rationale:** Prevents overload on LLM and keeps output manageable for users. Matches user-spec acceptance criteria.
+**Alternatives considered:** No limits (risk of LLM failures and poor UX with huge lists)
+
+### Decision 11: General error retry strategy
+**Decision:** GigaChat API calls retry once on any failure (5xx, network error, timeout). Transcription calls do not retry (faster-whisper is local, failure is likely persistent). All errors surfaced to user as friendly messages.
+**Rationale:** One retry handles transient GigaChat issues. Retrying whisper adds latency without benefit since it's localhost.
+**Alternatives considered:** Exponential backoff (over-engineering for MVP)
+
+### Decision 12: Logging — console.log with credential/PII exclusion
+**Decision:** Use console.log with timestamps. Log request metadata (user_id, duration, task_count) and errors. Never log: auth headers, API keys, bot token, transcript text, user comments, audio file contents.
+**Rationale:** Simple logging for MVP with 5 testers. PII/credential exclusion prevents accidental leaks in journalctl.
+**Alternatives considered:** Structured JSON logger (over-engineering for MVP)
+
+### Decision 13: Global error handler
+**Decision:** Register grammy's `bot.catch()` error handler. Log error, send generic message to user, do not crash process.
+**Rationale:** Unhandled errors in handlers must not crash the bot. grammy provides built-in error boundary.
+**Alternatives considered:** process.on('uncaughtException') — grammy's catch is more specific and appropriate
 
 ## Data Models
 
@@ -173,8 +198,9 @@ CREATE TABLE survey_responses (
 - `grammy` — Telegram Bot API framework
 - `better-sqlite3` — Synchronous SQLite driver
 - `node-fetch` v3 — HTTP client (ESM-native)
-- `form-data` — Multipart form data for faster-whisper
 - `dotenv` — Environment variable loading
+
+Note: `form-data` npm package is NOT used — node-fetch v3 has built-in `FormData` (`import fetch, { FormData, File } from 'node-fetch'`).
 
 ### Using existing (from project)
 - None — greenfield project
@@ -184,17 +210,25 @@ CREATE TABLE survey_responses (
 **Feature size:** L
 
 ### Unit tests
-- LLM provider abstraction: mock GigaChat, verify complete() contract
-- GigaChat OAuth2: mock token endpoint, test proactive refresh, test 401 retry
+- LLM provider abstraction: mock GigaChat, verify complete() contract returns expected string, handles errors
+- GigaChat OAuth2: mock token endpoint, test proactive refresh, test 401 retry, test general 5xx retry
 - Task extractor: mock LLM provider, test 7 key scenarios (simple task, multiple tasks, unknown person, alternative, no tasks, short input, noisy transcript)
 - DB queries: in-memory SQLite, test upsertUser, createVoiceRequest, saveFeedback, trial counter operations
+- Trial state machine: test phase transitions (1→2→3), survey_progress advancement (0→1→2→3→4), survey_blocked flag, fail-open behavior
+- Counter guard: verify counter increments only on successful task list delivery, not on errors
+- Consent guard: verify audio_path is set only when voice_consent=1, null otherwise
 - Transcript truncation: verify 4000 char limit, verify notification flag
-- Message formatting: verify task list format, error messages
+- Debounce buffer: verify timer fires after 3s, verify voices collected within window, verify batch limit of 10
+- Message formatting: verify task list format, error messages, no credentials/PII in log output
 
 ### Integration tests
 - Full pipeline with mock transcription + mock LLM: voice file → transcript → tasks → formatted output
 - Feedback flow: rating → comment → consent → DB state verification
+- Feedback interruption: new voice during pending feedback → previous abandoned, new processed
 - Trial system: counter decrement → survey trigger → survey completion → unlock
+- Trial survey resumption: abandon at question 2, come back → continues from question 2
+- Trial survey_blocked: 2 garbage answers → permanent block, no retry
+- Partial batch failure: 3 voices, 1 fails transcription → 2 processed, error noted
 - Multi-voice buffer: simulate 3 voices arriving within 3s → verify single LLM call with combined transcript
 
 ### E2E tests
@@ -221,6 +255,9 @@ Agent runs unit and integration tests via `npm test`. Agent verifies bot starts 
 | Multi-voice race condition | Per-chat debounce buffer (3s) with Map + timer |
 | Long transcript exceeds GigaChat token limit | Truncate to 4000 chars with user notification |
 | better-sqlite3 blocks event loop | Acceptable for 5 testers; switch to async driver in v2 if needed |
+| Credential leakage in logs | Decision 12: never log auth headers, API keys, tokens, transcripts |
+| faster-whisper exposed externally | Validate WHISPER_URL is loopback at startup; verify firewall in deploy task |
+| Prompt injection via transcript | LLM system prompt instructs task extraction only; no code execution risk in chat completion |
 
 ## Acceptance Criteria
 
@@ -239,6 +276,12 @@ Technical acceptance criteria (complement user-spec criteria):
 - [ ] Transcript truncation at 4000 chars with user notification
 - [ ] All user-facing strings centralized in messages module
 - [ ] Logging: each request logged with user_id, duration, task_count; all errors logged with timestamp
+- [ ] No credentials, auth headers, transcripts, or PII in log output
+- [ ] WHISPER_URL validated as loopback address at startup
+- [ ] Global error handler registered (bot.catch) — unhandled errors don't crash process
+- [ ] Feedback interruption: new voice resets session, previous feedback abandoned
+- [ ] Batch limit: max 10 voices per debounce window enforced
+- [ ] Output limit: max 10 tasks, user prompted to split if exceeded
 
 ## Implementation Tasks
 
@@ -250,7 +293,7 @@ Technical acceptance criteria (complement user-spec criteria):
 - **Reviewers:** code-reviewer, security-auditor, infrastructure-reviewer
 - **Verify-smoke:** `node -e "import Database from 'better-sqlite3'; const db = new Database(':memory:'); console.log('OK')"` → OK
 - **Files to modify:** `package.json`, `.gitignore`, `src/db/index.js`, `src/db/queries.js`, `src/db/migrations/001_initial.sql`
-- **Files to read:** `.env.example`, architecture.md, patterns.md
+- **Files to read:** `.env.example`, `.claude/skills/project-knowledge/references/architecture.md`, `.claude/skills/project-knowledge/references/patterns.md`
 
 #### Task 2: LLM Provider Abstraction + GigaChat Client
 - **Description:** Create LLM provider interface and GigaChat implementation with OAuth2 token management (proactive refresh, retry on 401) and Sberbank CA cert bundle. Enables task extraction in Wave 2.
@@ -258,14 +301,14 @@ Technical acceptance criteria (complement user-spec criteria):
 - **Reviewers:** code-reviewer, security-auditor, test-reviewer
 - **Verify-smoke:** `node -e "import { GigaChatProvider } from './src/services/llm/gigachat.js'; console.log('import OK')"` → import OK
 - **Files to modify:** `src/services/llm/provider.js`, `src/services/llm/gigachat.js`, `certs/russian_trusted_root_ca.cer`
-- **Files to read:** code-research.md (GigaChat API section)
+- **Files to read:** `work/mvp-core/code-research.md`
 
 #### Task 3: System Prompt for Task Extraction
 - **Description:** Write the system prompt that instructs the LLM to extract tasks from transcribed speech — removing verbal noise, resolving ambiguities, ordering by dependencies. Core intelligence of the bot.
 - **Skill:** prompt-master
 - **Reviewers:** prompt-reviewer
 - **Files to modify:** `prompts/task-extraction.md`
-- **Files to read:** user-spec.md (acceptance criteria, ambiguity examples), patterns.md (ambiguity resolution types)
+- **Files to read:** `work/mvp-core/user-spec.md`, `.claude/skills/project-knowledge/references/patterns.md`
 
 ### Wave 2 (depends on Wave 1 — Block 2: Core Pipeline)
 
@@ -297,31 +340,36 @@ Technical acceptance criteria (complement user-spec criteria):
 - **Files to read:** `src/services/transcription.js`, `src/services/taskExtractor.js`, `src/utils/messages.js`, `src/db/queries.js`
 - **Depends on:** Task 4, Task 5
 
-### Wave 3 (depends on Wave 2 — Block 3: Feedback & Trial)
+### Wave 3 (depends on Wave 2 — Block 3a: Feedback)
 
 #### Task 7: Feedback Flow + Voice Consent
-- **Description:** Handle inline keyboard callbacks for 1-5 ratings, text comment collection when rating <5, voice consent request with audio file saving. Session state tracks which voice_request_id to associate with feedback.
+- **Description:** Handle inline keyboard callbacks for 1-5 ratings, text comment collection when rating <5, voice consent request with audio file saving. Session state tracks which voice_request_id to associate with feedback. New voice during pending feedback silently abandons previous feedback (Decision 9).
 - **Skill:** code-writing
 - **Reviewers:** code-reviewer, security-auditor, test-reviewer
 - **Verify-user:** Rate a task list → if <5, check comment prompt → check consent prompt → verify data in DB
-- **Files to modify:** `src/handlers/feedback.js`
-- **Files to read:** `src/utils/messages.js`, `src/db/queries.js`, `src/handlers/voice.js`
+- **Files to modify:** `src/handlers/feedback.js`, `src/handlers/voice.js`
+- **Files to read:** `src/utils/messages.js`, `src/db/queries.js`
 - **Depends on:** Task 6
+
+### Wave 4 (depends on Wave 3 — Block 3b: Trial)
 
 #### Task 8: Trial System + Survey Form
 - **Description:** Enforce trial limits (30 free, +20 after survey). Implement sequential 4-question survey in chat with LLM sanity check (fail-open on LLM error, 2-strike rejection for garbage). Survey resumption on abandoned form. Counter increments only on successful task list delivery.
 - **Skill:** code-writing
 - **Reviewers:** code-reviewer, security-auditor, test-reviewer
-- **Files to modify:** `src/handlers/feedback.js` (survey flow), `src/handlers/voice.js` (trial check)
+- **Verify-smoke:** Run integration test: create user, process 30 voices (mock), verify survey triggers
+- **Files to modify:** `src/handlers/feedback.js`, `src/handlers/voice.js`
 - **Files to read:** `src/db/queries.js`, `src/services/llm/provider.js`, `src/utils/messages.js`
 - **Depends on:** Task 7
 
+### Wave 5 (depends on Wave 4 — Block 3c: UX Polish)
+
 #### Task 9: UX Polish + Error Handling + Logging
-- **Description:** Add processing status message (shown if >5s), long voice warning (>3min), centralize all error messages (no technical details), add console.log with timestamps for each request (user_id, duration, task_count) and all errors.
+- **Description:** Add processing status message (shown if >5s), long voice warning (>3min), global bot error handler (Decision 13), centralize all error messages (no technical details). Add console.log with timestamps for request metadata and errors — never log credentials or PII (Decision 12). Enforce batch limit of 10 voices and output limit of 10 tasks (Decision 10).
 - **Skill:** code-writing
-- **Reviewers:** code-reviewer, test-reviewer
+- **Reviewers:** code-reviewer, security-auditor, test-reviewer
 - **Files to modify:** `src/handlers/voice.js`, `src/utils/messages.js`, `src/bot.js`
-- **Files to read:** user-spec.md (error scenarios, edge cases)
+- **Files to read:** `work/mvp-core/user-spec.md`
 - **Depends on:** Task 8
 
 ### Audit Wave
