@@ -132,3 +132,20 @@ Review details — in JSON files via links. QA report — in logs/working/.
 
 **Verification:**
 - `npm test` (db + llm + transcription + taskExtractor) → 46 passed (29 existing + 17 new)
+
+---
+
+## Task 6: Voice Handler + Multi-Voice Context
+
+**Status:** Done
+**Commit:** (see below)
+**Agent:** voice-handler-builder
+**Summary:** Created `src/handlers/voice.js` — the central voice-to-tasks pipeline orchestrator. Implements per-chat debounce buffer (3s) with Map+setTimeout for multi-voice context merging, partial failure handling (continue with successful transcripts, notify user), batch limit of 10 voices (Decision 10), transcript truncation note (Decision 4), trial check before processing, feedback session reset on new voice (Decision 9), InlineKeyboard with 1-5 rating buttons, and DB recording via createVoiceRequest/updateVoiceRequest. All dependencies injected for testability. Added 7 new message strings and 2 helper functions to `src/utils/messages.js`. TDD: 16 tests written first, confirmed failing, then implementation made all pass.
+**Deviations:** The `extractTasks` function from Task 5 already handles transcript truncation internally (concatenation + 4000-char limit), so the voice handler delegates truncation to it rather than duplicating the logic. The handler reads `result.truncated` flag from `extractTasks` return value.
+
+**Reviews:**
+
+(no review round — direct implementation)
+
+**Verification:**
+- `npm test` → 78 passed (62 existing + 16 new voice handler tests)
