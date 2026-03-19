@@ -73,9 +73,9 @@ The system prompt is a separate markdown file iterable without code changes. Mul
 **Alternatives considered:** No truncation (risk of API failures), audio splitting by pauses (deferred to v2, requires ffmpeg)
 
 ### Decision 5: Fail-open on sanity check LLM failure with heuristic gate
-**Decision:** Before LLM sanity check, apply a minimum heuristic gate: reject answers under 5 words or containing only punctuation/emoji. If GigaChat is unavailable after heuristic passes, accept the answer as adequate.
-**Rationale:** Heuristic gate blocks trivial bypass attempts (empty/gibberish) even during LLM downtime, without adding infrastructure complexity. User should not be permanently stuck because of an infrastructure issue.
-**Alternatives considered:** Queue and retry later (complex state management for MVP), pure fail-open without heuristic (trivially exploitable)
+**Decision:** Before LLM sanity check, apply a question-aware heuristic gate: for text questions (Q1-Q3) reject answers under 5 words or containing only punctuation/emoji; for Q4 (numeric rating 1-5) accept any single digit 1-5. If GigaChat is unavailable after heuristic passes, accept the answer as adequate.
+**Rationale:** Heuristic gate blocks trivial bypass attempts (empty/gibberish) even during LLM downtime. Q4 exemption prevents rejecting valid numeric answers like "4". User should not be permanently stuck because of an infrastructure issue.
+**Alternatives considered:** Queue and retry later (complex state management for MVP), pure fail-open without heuristic (trivially exploitable), uniform 5-word gate (breaks Q4)
 
 ### Decision 6: better-sqlite3 (synchronous) for database
 **Decision:** Use synchronous SQLite driver
@@ -132,17 +132,22 @@ The system prompt is a separate markdown file iterable without code changes. Mul
 **Rationale:** Decision 12 prohibits credential logging, but without explicit sanitization in error paths, raw error objects leak credentials via `.url` and `.headers` properties.
 **Alternatives considered:** Wrapping console.log globally (fragile, easy to bypass)
 
-### Decision 17: Per-user cooldown (anti-abuse)
-**Decision:** After each debounce batch completes (success or error), the user enters a 10-second cooldown. Voices during cooldown get a friendly "please wait" message. Implemented as `Map<userId, lastProcessedAt>` in memory.
-**Rationale:** Without rate limiting, a single user can exhaust GigaChat free tier (1M tokens/year) and saturate VPS I/O by spamming voices every 3 seconds.
-**Alternatives considered:** No rate limiting (exploitable), token bucket (over-engineering for MVP)
+### Decision 17: No per-user rate limiting in MVP
+**Decision:** No cooldown or rate limiting for MVP. User-spec explicitly states "5 testers, no request queue needed." Trial counter (50 total) is the natural abuse cap.
+**Rationale:** 5 trusted testers with 50 requests each = max 250 total requests. GigaChat free tier (1M tokens) is sufficient. Rate limiting adds user-visible behavior not in user-spec.
+**Alternatives considered:** 10s cooldown per user (scope creep — not in user-spec, adds UX friction for trusted testers)
 
-### Decision 18: CA certificate integrity verification
-**Decision:** Hardcode expected SHA-256 fingerprint of Sberbank CA cert as a constant. At startup, compute and compare — throw if mismatch. Log warning if cert expires within 30 days.
-**Rationale:** A certificate replacement (accidental or compromised git push) would silently trust a different CA for all GigaChat API calls, enabling MITM.
-**Alternatives considered:** Trust on first use (no protection against replacement), skip verification (silent MITM risk)
+### Decision 18: CA certificate — bundle only, no fingerprint verification in MVP
+**Decision:** Bundle Sberbank CA cert in `certs/` directory (per Decision 8). No startup fingerprint verification or expiry warnings for MVP.
+**Rationale:** Fingerprint verification is disproportionate for 5 testers over a short MVP period. The cert is committed to git — changes are visible in diffs and PRs. Gitleaks pre-commit hook provides additional safety.
+**Alternatives considered:** SHA-256 fingerprint check at startup (overengineering for MVP scope)
 
-### Decision 19: SQLite database path and permissions
+### Decision 19: Partial batch failure handling
+**Decision:** If one voice in a multi-voice batch fails transcription, process remaining voices and send result with a note about the failure. Counter increments only for successfully processed voices. User sees: task list from successful voices + "1 из 3 голосовых не удалось обработать."
+**Rationale:** Partial results are more valuable than total failure. User can re-send the failed voice separately.
+**Alternatives considered:** Fail entire batch (loses all work), retry failed voice (adds latency, may not help if issue is persistent)
+
+### Decision 20: SQLite database path and permissions
 **Decision:** DB_PATH env var with default `data/bot.db`. At startup, ensure `data/` directory exists. `data/` and `*.db` in `.gitignore`.
 **Rationale:** Database contains PII (telegram_user_id, username, feedback). Must not be accidentally committed to version control.
 **Alternatives considered:** Store in project root (risk of git commit), /var/lib path (harder for dev)
@@ -231,7 +236,7 @@ CREATE TABLE survey_responses (
 - `node-fetch` v3 — HTTP client (ESM-native)
 - `dotenv` — Environment variable loading
 
-Note: `form-data` npm package is NOT used — node-fetch v3 has built-in `FormData` (`import fetch, { FormData, File } from 'node-fetch'`).
+Note: `form-data` npm package is NOT used — node-fetch v3 has built-in `FormData` (`import fetch, { FormData, Blob } from 'node-fetch'`). Use `Blob` with filename parameter on `formData.append()` for file uploads.
 
 ### Using existing (from project)
 - None — greenfield project
@@ -243,11 +248,12 @@ Note: `form-data` npm package is NOT used — node-fetch v3 has built-in `FormDa
 ### Unit tests
 - LLM provider abstraction: mock HTTP, verify complete() extracts content string from JSON (not raw response), verify token refresh called when <60s to expiry, verify exactly one retry on 401
 - GigaChat OAuth2: mock token endpoint, test proactive refresh, test 401 retry, test general 5xx retry
-- Task extractor: mock LLM provider, test 7 key scenarios (simple task, multiple tasks, unknown person, alternative, no tasks, short input, noisy transcript)
+- Task extractor: mock LLM provider, test 8 key scenarios (simple task, multiple tasks, unknown person, alternative, no tasks, short input, noisy transcript, >10 tasks → user prompted to split)
 - DB queries: in-memory SQLite, test upsertUser, createVoiceRequest, saveFeedback, trial counter operations
 - Trial state machine: test phase transitions (1→2→3), survey_progress advancement (0→1→2→3→4), survey_blocked flag, fail-open behavior
 - Counter guard: verify counter increments only on successful task list delivery, not on errors
 - Consent guard: verify audio_path is set only when voice_consent=1, null otherwise
+- Survey heuristic gate: verify Q1-Q3 answers under 5 words rejected, punctuation-only rejected, Q4 accepts single digit 1-5, adequate answers pass through to LLM
 - Transcript truncation: verify 4000 char limit, verify notification flag
 - Debounce buffer (fake timers): first voice starts 3s timer, second voice resets timer, timer fires → single LLM call with combined transcripts, voice after timer = new buffer. Batch limit of 10.
 - Message formatting: verify task list format, error messages, no credentials/PII in log output
@@ -322,11 +328,10 @@ Technical acceptance criteria (complement user-spec criteria):
 - [ ] Credential sanitization: unit test asserts no token/key in log output on error
 - [ ] Rating = 5 terminates feedback immediately (no comment/consent prompts)
 - [ ] Voice < 2s processed normally (no special handling)
-- [ ] Per-user cooldown (10s) after each batch — prevents abuse (Decision 17)
-- [ ] CA cert fingerprint verified at startup (Decision 18)
-- [ ] DB stored in data/bot.db, data/ in .gitignore (Decision 19)
+- [ ] Partial batch failure: successful voices processed, user notified of failures (Decision 19)
+- [ ] DB stored in data/bot.db, data/ in .gitignore (Decision 20)
 - [ ] npm audit reports no high/critical vulnerabilities before deploy
-- [ ] Survey heuristic gate: answers under 5 words rejected before LLM check (Decision 5)
+- [ ] Survey heuristic gate: Q1-Q3 answers under 5 words rejected, Q4 accepts digit 1-5 (Decision 5)
 - [ ] survey_blocked transition logged with userId and questionNum
 - [ ] Task extractor validates LLM response format (numbered list) before forwarding
 

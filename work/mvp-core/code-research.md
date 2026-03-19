@@ -178,7 +178,7 @@ GigaChat API requires Sberbank CA certificates not in Node.js's default trust st
 The exact request/response format of the running faster-whisper Flask server is not documented in any project file. Before implementing `src/services/transcription.js`, the actual endpoint must be verified via `curl` against `localhost:8765` on the VPS. Assumptions: multipart POST, JSON response — but this must be confirmed.
 
 ### Multi-Voice Context Race Condition
-When a user forwards multiple voice messages, Telegram delivers them as separate update events in rapid succession. grammy processes them concurrently. A naive implementation will start 3 separate pipelines for 3 forwarded voices. Mitigation: collect forwarded voices within a short time window (e.g., 500ms debounce per chat), merge transcripts, then run one LLM call. This requires per-chat state (a `Map<chatId, pendingVoices>` with a timer).
+When a user forwards multiple voice messages, Telegram delivers them as separate update events in rapid succession. grammy processes them concurrently. A naive implementation will start 3 separate pipelines for 3 forwarded voices. Mitigation: collect forwarded voices within a 3-second debounce window per chat, merge transcripts, then run one LLM call. This requires per-chat state (a `Map<chatId, pendingVoices>` with a timer).
 
 ### GigaChat Token Expiry During Request
 OAuth2 tokens expire. If a token expires mid-request, the call fails. The GigaChat client in `src/services/llm/gigachat.js` must implement proactive token refresh (check expiry before each call, refresh if < 60s remaining) rather than relying on 401 retry.
@@ -187,7 +187,7 @@ OAuth2 tokens expire. If a token expires mid-request, the call fails. The GigaCh
 After returning the task list, the bot must remember which `voice_request_id` to associate with the incoming rating. grammy's session middleware (in-memory or SQLite-backed) is needed to store `{ awaitingFeedback: true, voiceRequestId: number }` per chat. Without sessions, callback query handlers can't correlate ratings to requests.
 
 ### Input Sanitization
-Transcribed text is sent directly to GigaChat as user content. No injection risk in the traditional sense (it's a prompt, not SQL), but extremely long transcripts (>10min voices) could hit GigaChat token limits. Should truncate input at a safe character limit (e.g., 8000 chars) before LLM call.
+Transcribed text is sent directly to GigaChat as user content. No injection risk in the traditional sense (it's a prompt, not SQL), but extremely long transcripts (>10min voices) could hit GigaChat token limits. Truncate input at 4000 chars before LLM call (Decision 4).
 
 ### Non-Voice Messages
 Bot must handle all message types gracefully. If user sends text, photo, sticker, etc. — respond with a friendly explanation. grammy's `bot.on('message', ...)` catch-all handler needed as fallback.
@@ -302,8 +302,10 @@ src/
     queries.js                   — named query functions
     migrations/
       001_initial.sql            — create users, voice_requests, feedback tables
-utils/
+  utils/
     messages.js                  — message strings + send helpers
+certs/
+  russian_trusted_root_ca.cer    — Sberbank CA cert for GigaChat TLS
 prompts/
   task-extraction.md             — LLM system prompt (iterable without code changes)
 package.json                     — "type": "module", dependencies, jest config
