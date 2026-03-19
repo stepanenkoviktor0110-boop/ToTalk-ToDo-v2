@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, jest } from '@jest/globals';
+import { describe, it, expect, beforeEach } from '@jest/globals';
 
 // We use constructor injection for fetch to avoid unstable ESM module mocking.
 // GigaChatProvider accepts { fetchFn, authKey, model, certPath } in constructor.
@@ -140,10 +140,12 @@ describe('GigaChatProvider', () => {
     expect(calls.filter((u) => u.includes('oauth')).length).toBe(1);
   });
 
-  it('retries once on 401', async () => {
+  it('retries once on 401 and refreshes token', async () => {
     let completionCallCount = 0;
+    let tokenCallCount = 0;
     const mockFetch = async (url, opts) => {
       if (url.includes('oauth')) {
+        tokenCallCount++;
         return {
           ok: true,
           status: 200,
@@ -182,6 +184,8 @@ describe('GigaChatProvider', () => {
     const result = await provider.complete('sys', 'msg');
     expect(result).toBe('retried OK');
     expect(completionCallCount).toBe(2);
+    // 1 initial token fetch + 1 refresh on 401
+    expect(tokenCallCount).toBe(2);
   });
 
   it('retries once on 5xx and throws on second failure', async () => {
@@ -450,5 +454,156 @@ describe('GigaChatProvider', () => {
     const result = await provider.complete('sys', 'msg');
     expect(result).toBe('recovered');
     expect(completionCalls).toBe(2);
+  });
+
+  it('deduplicates concurrent token refreshes', async () => {
+    let tokenCallCount = 0;
+    const mockFetch = async (url, opts) => {
+      if (url.includes('oauth')) {
+        tokenCallCount++;
+        // Small delay to ensure both calls overlap
+        await new Promise((r) => setTimeout(r, 20));
+        return {
+          ok: true,
+          status: 200,
+          json: async () => tokenResponse(),
+          text: async () => JSON.stringify(tokenResponse()),
+        };
+      }
+      if (url.includes('chat/completions')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => completionResponse('parallel ok'),
+          text: async () => JSON.stringify(completionResponse('parallel ok')),
+        };
+      }
+      throw new Error(`Unhandled: ${url}`);
+    };
+
+    const provider = new GigaChatProvider({
+      fetchFn: mockFetch,
+      authKey: 'dGVzdC1rZXk=',
+      model: 'GigaChat-2',
+      certPath: null,
+    });
+
+    // Two concurrent calls — both need a token, but only one OAuth call should be made
+    const [r1, r2] = await Promise.all([
+      provider.complete('sys', 'msg1'),
+      provider.complete('sys', 'msg2'),
+    ]);
+    expect(r1).toBe('parallel ok');
+    expect(r2).toBe('parallel ok');
+    expect(tokenCallCount).toBe(1);
+  });
+
+  it('does not refresh token when still valid', async () => {
+    let tokenCallCount = 0;
+    const mockFetch = async (url, opts) => {
+      if (url.includes('oauth')) {
+        tokenCallCount++;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => tokenResponse(600000),
+          text: async () => JSON.stringify(tokenResponse(600000)),
+        };
+      }
+      if (url.includes('chat/completions')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => completionResponse('still valid'),
+          text: async () => JSON.stringify(completionResponse('still valid')),
+        };
+      }
+      throw new Error(`Unhandled: ${url}`);
+    };
+
+    const provider = new GigaChatProvider({
+      fetchFn: mockFetch,
+      authKey: 'dGVzdC1rZXk=',
+      model: 'GigaChat-2',
+      certPath: null,
+    });
+
+    // First call fetches token
+    await provider.complete('sys', 'msg');
+    expect(tokenCallCount).toBe(1);
+
+    // Set token to be valid for another 2 minutes (above 60s threshold)
+    provider._expiresAt = Date.now() + 120000;
+
+    // Second call should NOT refresh
+    const result = await provider.complete('sys', 'msg2');
+    expect(result).toBe('still valid');
+    expect(tokenCallCount).toBe(1);
+  });
+
+  it('throws on timeout during token fetch', async () => {
+    const mockFetch = createMockFetch([
+      {
+        match: 'oauth',
+        delay: 20000, // longer than timeout
+        status: 200,
+        body: tokenResponse(),
+      },
+      {
+        match: 'chat/completions',
+        status: 200,
+        body: completionResponse('should not reach'),
+      },
+    ]);
+
+    const provider = new GigaChatProvider({
+      fetchFn: mockFetch,
+      authKey: 'dGVzdC1rZXk=',
+      model: 'GigaChat-2',
+      certPath: null,
+      timeoutMs: 50,
+    });
+
+    await expect(provider.complete('sys', 'msg')).rejects.toThrow(
+      /token.*failed|timed.out|timeout/i,
+    );
+  });
+
+  it('throws on network error during token fetch', async () => {
+    let completionCalls = 0;
+    const mockFetch = async (url, opts) => {
+      if (url.includes('oauth')) {
+        throw new Error('ECONNREFUSED');
+      }
+      if (url.includes('chat/completions')) {
+        completionCalls++;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => completionResponse('should not reach'),
+          text: async () => JSON.stringify(completionResponse('should not reach')),
+        };
+      }
+      throw new Error(`Unhandled: ${url}`);
+    };
+
+    const provider = new GigaChatProvider({
+      fetchFn: mockFetch,
+      authKey: 'dGVzdC1rZXk=',
+      model: 'GigaChat-2',
+      certPath: null,
+    });
+
+    await expect(provider.complete('sys', 'msg')).rejects.toThrow(
+      /token.*failed|ECONNREFUSED/i,
+    );
+    // Chat completion should never be called
+    expect(completionCalls).toBe(0);
+  });
+
+  it('throws when GIGACHAT_AUTH_KEY is missing', async () => {
+    expect(() => new GigaChatProvider({
+      certPath: null,
+    })).toThrow('GIGACHAT_AUTH_KEY is required');
   });
 });

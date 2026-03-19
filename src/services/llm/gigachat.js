@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import https from 'node:https';
 import { randomUUID } from 'node:crypto';
 import { LLMProvider } from './provider.js';
@@ -32,6 +33,9 @@ export class GigaChatProvider extends LLMProvider {
   constructor(opts = {}) {
     super();
     this._authKey = opts.authKey ?? process.env.GIGACHAT_AUTH_KEY;
+    if (!this._authKey) {
+      throw new Error('GIGACHAT_AUTH_KEY is required');
+    }
     this._model = opts.model ?? process.env.GIGACHAT_MODEL ?? 'GigaChat-2';
     this._timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
@@ -40,19 +44,22 @@ export class GigaChatProvider extends LLMProvider {
     this._expiresAt = 0;
     this._refreshPromise = null;
 
-    // HTTPS agent with custom CA cert for Sberbank domains
+    // HTTPS agent with custom CA cert for Sberbank domains.
+    // this._agent MUST only be used for Sberbank domain endpoints;
+    // _fetchWithTimeout enforces a hostname check before attaching it.
     this._agent = null;
     const certPath =
       opts.certPath !== undefined
         ? opts.certPath
-        : new URL('../../../certs/russian_trusted_root_ca.cer', import.meta.url)
-            .pathname;
+        : fileURLToPath(
+            new URL('../../../certs/russian_trusted_root_ca.cer', import.meta.url),
+          );
     if (certPath) {
       try {
         const cert = readFileSync(certPath);
         this._agent = new https.Agent({ ca: cert });
       } catch (err) {
-        console.error(
+        throw new Error(
           `Failed to load CA cert from ${certPath}: ${err.message}`,
         );
       }
@@ -85,11 +92,20 @@ export class GigaChatProvider extends LLMProvider {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this._timeoutMs);
 
+    // Only attach custom CA agent for Sberbank domains
+    let agent;
+    if (this._agent) {
+      const hostname = new URL(url).hostname;
+      if (hostname.endsWith('.sberbank.ru')) {
+        agent = this._agent;
+      }
+    }
+
     try {
       const response = await fetchFn(url, {
         ...options,
         signal: controller.signal,
-        ...(this._agent ? { agent: this._agent } : {}),
+        ...(agent ? { agent } : {}),
       });
       return response;
     } finally {
@@ -227,11 +243,22 @@ export class GigaChatProvider extends LLMProvider {
       }
     }
 
-    // Handle 401: refresh token and retry exactly once
+    // Handle 401: refresh token via dedup guard and retry exactly once
     if (response.status === 401) {
       console.error('GigaChat completion returned 401, refreshing token');
-      await this._refreshToken();
-      response = await this._chatCompletion(systemPrompt, userMessage);
+      this._accessToken = null;
+      this._expiresAt = 0;
+      await this._ensureToken();
+      try {
+        response = await this._chatCompletion(systemPrompt, userMessage);
+      } catch (retryErr) {
+        if (retryErr.name === 'AbortError' || retryErr.type === 'aborted') {
+          throw new Error('GigaChat request timed out');
+        }
+        throw new Error(
+          `GigaChat completion failed after 401 retry: ${retryErr.message}`,
+        );
+      }
       if (!response.ok) {
         const bodyText = await response.text().catch(() => '(unreadable)');
         console.error(
