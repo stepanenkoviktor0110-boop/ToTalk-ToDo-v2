@@ -104,7 +104,7 @@ Review details — in JSON files via links. QA report — in logs/working/.
 ## Task 4: Bot Entry Point + Handler Skeleton
 
 **Status:** Done
-**Commit:** (pending)
+**Commit:** efa508b
 **Agent:** bot-builder
 **Summary:** Created grammy bot entry point (`src/bot.js`) with `createBot()` factory function, session middleware matching tech-spec contract (awaitingFeedback, voiceRequestId, awaitingComment, awaitingConsent, inSurvey, surveyRetries), /start handler with upsertUser and dynamic trial info in welcome message, non-voice message handlers for text/photo/sticker/document/video/audio/animation/location/contact that exclude voice messages (left for Task 6), and global error handler with credential sanitization (Decision 16). Created centralized messages module (`src/utils/messages.js`) with all Russian strings. TDD: 13 tests written first (10 bot + 3 messages), confirmed failing, then implementation made all pass.
 **Deviations:** Added `options` parameter to `createBot()` to accept grammy `botInfo` for testability — not in spec but necessary for unit testing without network calls.
@@ -115,3 +115,20 @@ Review details — in JSON files via links. QA report — in logs/working/.
 
 **Verification:**
 - `npm test` → 59 passed (29 existing + 16 LLM + 10 bot + 3 messages + 1 extra from llm.test.js)
+
+---
+
+## Task 5: Transcription + Task Extraction Services
+
+**Status:** Done
+**Commit:** (see below)
+**Agent:** service-builder
+**Summary:** Built two core service modules: `src/services/transcription.js` (faster-whisper HTTP client with 20s AbortController timeout, multipart/form-data via node-fetch v3 built-in FormData/Blob, WHISPER_URL env var support) and `src/services/taskExtractor.js` (reads system prompt from `prompts/task-extraction.md` with lazy caching, concatenates transcripts, truncates at 4000 chars, calls LLM provider, parses numbered list / __NO_TASKS__ / __TOO_MANY_TASKS__ markers). Both use constructor/parameter injection for testability following the GigaChat pattern.
+**Deviations:** None
+
+**Reviews:**
+
+(no review round — direct implementation)
+
+**Verification:**
+- `npm test` (db + llm + transcription + taskExtractor) → 46 passed (29 existing + 17 new)
