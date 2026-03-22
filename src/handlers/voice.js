@@ -18,6 +18,8 @@ import {
   GENERIC_ERROR,
   BATCH_LIMIT_NOTE,
   TRANSCRIPT_TRUNCATED_NOTE,
+  PROCESSING_STATUS,
+  LONG_VOICE_WARNING,
   partialFailureNote,
   formatTaskList,
 } from '../utils/messages.js';
@@ -26,6 +28,8 @@ import { enterSurvey } from './feedback.js';
 const DEBOUNCE_MS = 3000;
 const MAX_BATCH_SIZE = 10;
 const MAX_TRANSCRIPT_LENGTH = 4000;
+const STATUS_DELAY_MS = 5000;
+const LONG_VOICE_SECONDS = 180; // 3 minutes
 
 /**
  * Per-chat debounce buffer.
@@ -63,6 +67,21 @@ export function hasBuffer(chatId) {
 function sanitize(str) {
   if (typeof str !== 'string') return str;
   return str.replace(/\/bot[^/]+\//g, '/bot[REDACTED]/');
+}
+
+/**
+ * Delete the "processing..." status message if it was sent.
+ * Best-effort — silently ignores failures.
+ *
+ * @param {object} ctx - grammy context
+ * @param {number|null} messageId
+ */
+async function deleteStatusMessage(ctx, messageId) {
+  if (messageId) {
+    try {
+      await ctx.api.deleteMessage(ctx.chat.id, messageId);
+    } catch { /* non-critical */ }
+  }
 }
 
 /**
@@ -272,8 +291,25 @@ export async function processVoiceBatch(ctx, voices, deps) {
     processVoices = voices.slice(0, MAX_BATCH_SIZE);
   }
 
+  // Long voice warning (>3 min) — send before processing starts
+  const maxDuration = Math.max(...processVoices.map((v) => v.duration));
+  if (maxDuration > LONG_VOICE_SECONDS) {
+    await ctx.reply(LONG_VOICE_WARNING);
+  }
+
   // Show typing indicator for the duration of processing
   const stopTyping = startTyping(ctx);
+
+  // Status message if processing takes >5s
+  let statusMessageId = null;
+  const statusTimer = setTimeout(async () => {
+    try {
+      const sent = await ctx.reply(PROCESSING_STATUS);
+      statusMessageId = sent.message_id;
+    } catch { /* non-critical */ }
+  }, STATUS_DELAY_MS);
+
+  const pipelineStart = Date.now();
 
   // Download and transcribe each voice
   const { transcripts, failedCount, successfulVoices } =
@@ -281,7 +317,9 @@ export async function processVoiceBatch(ctx, voices, deps) {
 
   // All voices failed
   if (transcripts.length === 0) {
+    clearTimeout(statusTimer);
     stopTyping();
+    await deleteStatusMessage(ctx, statusMessageId);
     await ctx.reply(ALL_VOICES_FAILED);
     return;
   }
@@ -297,7 +335,9 @@ export async function processVoiceBatch(ctx, voices, deps) {
   try {
     result = await extractTasks(transcripts, deps.llmProvider);
   } catch (err) {
+    clearTimeout(statusTimer);
     stopTyping();
+    await deleteStatusMessage(ctx, statusMessageId);
     const ts = new Date().toISOString();
     // Decision 12: generic error type only, no transcript/PII in logs
     console.error(`[${ts}] task extraction failed: chatId=${ctx.chat.id}, errorType=${err.constructor.name}`);
@@ -305,7 +345,9 @@ export async function processVoiceBatch(ctx, voices, deps) {
     return;
   }
 
+  clearTimeout(statusTimer);
   stopTyping();
+  await deleteStatusMessage(ctx, statusMessageId);
 
   // Handle special markers
   if (result.marker === 'no_tasks') {
@@ -335,6 +377,13 @@ export async function processVoiceBatch(ctx, voices, deps) {
 
   const lastVoiceRequestId = persistBatch(user, successfulVoices, result, combinedTranscript, deps);
   decrementTrial(user.id);
+
+  // Decision 12: log request metadata (no PII/credentials/transcript)
+  const durationMs = Date.now() - pipelineStart;
+  const totalDurationSec = processVoices.reduce((sum, v) => sum + v.duration, 0);
+  console.log(
+    `[${new Date().toISOString()}] voice processed: userId=${user.id}, voices=${successfulVoices.length}, audioDuration=${totalDurationSec}s, taskCount=${result.tasks.length}, pipelineMs=${durationMs}`
+  );
 
   // Set session state for feedback flow (Task 7)
   ctx.session.awaitingFeedback = true;

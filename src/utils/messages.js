@@ -28,6 +28,12 @@ export const NO_TASKS_FOUND =
 export const TOO_MANY_TASKS =
   'В сообщении слишком много задач. Попробуй разбить на несколько коротких голосовых.';
 
+export const PROCESSING_STATUS =
+  'Обрабатываю голосовое...';
+
+export const LONG_VOICE_WARNING =
+  '⏳ Голосовое длиннее 3 минут — обработка займёт больше времени.';
+
 export const ALL_VOICES_FAILED =
   'Не удалось обработать голосовое сообщение. Попробуй ещё раз.';
 
