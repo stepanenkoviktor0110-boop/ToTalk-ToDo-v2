@@ -102,6 +102,15 @@ export function saveSurveyResponse(userId, questionNum, answer, isAdequate, reje
 }
 
 /**
+ * Get a voice request by ID.
+ * @param {number} id
+ * @returns {object|undefined}
+ */
+export function getVoiceRequest(id) {
+  return getDb().prepare('SELECT * FROM voice_requests WHERE id = ?').get(id);
+}
+
+/**
  * Get a user by their Telegram user ID.
  * @param {number} telegramUserId
  * @returns {object|undefined}

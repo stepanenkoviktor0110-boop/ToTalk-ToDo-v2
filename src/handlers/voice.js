@@ -21,6 +21,7 @@ import {
   partialFailureNote,
   formatTaskList,
 } from '../utils/messages.js';
+import { enterSurvey } from './feedback.js';
 
 const DEBOUNCE_MS = 3000;
 const MAX_BATCH_SIZE = 10;
@@ -217,6 +218,20 @@ function persistBatch(user, successfulVoices, result, combinedTranscript, deps) 
 }
 
 /**
+ * Show "typing..." indicator repeatedly until the returned stop function is called.
+ * Telegram clears the indicator after 5s, so we refresh every 4s.
+ *
+ * @param {object} ctx - grammy context
+ * @returns {Function} stop — call to cancel the interval
+ */
+function startTyping(ctx) {
+  const send = () => ctx.api.sendChatAction(ctx.chat.id, 'typing').catch(() => {});
+  send();
+  const interval = setInterval(send, 4000);
+  return () => clearInterval(interval);
+}
+
+/**
  * Process a batch of voice messages.
  *
  * Pipeline: trial check → download → transcribe → truncate → extract → format → send → DB
@@ -240,6 +255,11 @@ export async function processVoiceBatch(ctx, voices, deps) {
   // Upsert user and check trial
   const user = upsertUser(userId, username);
   if (user.trial_remaining === 0) {
+    // Check if eligible for survey (Decision 15)
+    if (user.trial_phase === 1 && !user.survey_blocked && user.survey_progress < 4) {
+      await enterSurvey(ctx, user);
+      return;
+    }
     await ctx.reply(TRIAL_EXHAUSTED);
     return;
   }
@@ -252,12 +272,16 @@ export async function processVoiceBatch(ctx, voices, deps) {
     processVoices = voices.slice(0, MAX_BATCH_SIZE);
   }
 
+  // Show typing indicator for the duration of processing
+  const stopTyping = startTyping(ctx);
+
   // Download and transcribe each voice
   const { transcripts, failedCount, successfulVoices } =
     await downloadAndTranscribe(processVoices, deps, ctx.chat.id);
 
   // All voices failed
   if (transcripts.length === 0) {
+    stopTyping();
     await ctx.reply(ALL_VOICES_FAILED);
     return;
   }
@@ -273,12 +297,15 @@ export async function processVoiceBatch(ctx, voices, deps) {
   try {
     result = await extractTasks(transcripts, deps.llmProvider);
   } catch (err) {
+    stopTyping();
     const ts = new Date().toISOString();
     // Decision 12: generic error type only, no transcript/PII in logs
     console.error(`[${ts}] task extraction failed: chatId=${ctx.chat.id}, errorType=${err.constructor.name}`);
     await ctx.reply(GENERIC_ERROR);
     return;
   }
+
+  stopTyping();
 
   // Handle special markers
   if (result.marker === 'no_tasks') {

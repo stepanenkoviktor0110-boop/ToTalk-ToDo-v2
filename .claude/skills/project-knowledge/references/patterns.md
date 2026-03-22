@@ -102,7 +102,9 @@ None configured yet.
 - Max 10 tasks per voice message — if more, ask user to split into shorter messages
 - Processing > 30 seconds → send intermediate status ("processing...")
 - Voice > 3 minutes → warn about longer processing time
-- Feedback: after each processed voice, ask rating 1-5. If rating < 5 → ask short comment. Store all feedback in SQLite.
-- Voice consent: when rating < 5, ask user for consent to listen to original voice for quality improvement. Consent is per-message (not blanket). If declined — voice data must not be stored or used. Ask each time separately.
+- Feedback flow (Decision 9): after each task list, show 1-5 rating buttons. Rating=5 → save and thank. Rating<5 → ask text comment → ask voice consent (Yes/No buttons) → save feedback. New voice during pending feedback silently abandons it.
+- Voice consent: after comment, ask consent to save original audio for quality improvement. If yes → download audio, save to `data/voices/{id}.oga`, set `audio_path` in DB. If no → `voice_consent=0`, no audio saved.
 - User tracking: register every user on first interaction, track usage statistics (total messages, last active, trial remaining).
-- Trial: 30 free voice messages → request feedback report → 20 more free → then 10/day or packages (v2)
+- Trial system (Decision 15): 30 free → survey (4 questions) → +20 → full block. Phase transitions: phase 1 (30 free) → phase 2 (survey completed, +20) → phase 3 (exhausted).
+- Survey flow: 4 questions asked sequentially. Each answer checked by heuristic gate (Q1-Q3: min 5 words, no punctuation-only; Q4: digit 1-5), then LLM sanity check. 2-strike rule per question → permanent block (`survey_blocked=1`). Fail-open on LLM error. Resumption from `survey_progress` in DB if user abandons mid-flow.
+- Counter guard: trial counter decrements only on successful task list delivery, not on errors or special markers.

@@ -5,10 +5,18 @@ import { createTranscriber } from './services/transcription.js';
 import { extractTasks } from './services/taskExtractor.js';
 import { createBot } from './bot.js';
 import { registerVoiceHandler } from './handlers/voice.js';
+import { registerFeedbackHandler } from './handlers/feedback.js';
 import {
   upsertUser,
+  getUserByTelegramId,
   createVoiceRequest,
   updateVoiceRequest,
+  getVoiceRequest,
+  saveFeedback,
+  saveSurveyResponse,
+  advanceSurveyProgress,
+  completeSurvey,
+  blockSurvey,
   decrementTrial,
 } from './db/queries.js';
 
@@ -77,12 +85,22 @@ async function main() {
 
     // DB operations
     upsertUser,
+    getUserByTelegramId,
     createVoiceRequest,
     updateVoiceRequest,
+    getVoiceRequest,
+    saveFeedback,
+    saveSurveyResponse,
+    advanceSurveyProgress,
+    completeSurvey,
+    blockSurvey,
     decrementTrial,
     db: getDb(),
   };
 
+  // Feedback handler must be registered before voice handler
+  // so callback queries (rate:*, consent:*) are intercepted first
+  registerFeedbackHandler(bot, deps);
   registerVoiceHandler(bot, deps);
 
   // Graceful shutdown

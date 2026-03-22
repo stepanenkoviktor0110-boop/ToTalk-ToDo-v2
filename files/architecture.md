@@ -1,107 +1,123 @@
-# Architecture: VoiceTask Bot
+# Architecture
 
-## Технический стек
+## Purpose
+Technical architecture overview for AI agents. Helps agents understand HOW the system is built.
 
-| Слой | Технология | Обоснование |
-|------|-----------|-------------|
-| Runtime | Node.js v22 | Уже на VPS, единый стек |
-| Telegram | grammy или node-telegram-bot-api | Лёгкие, хорошо документированные |
-| STT | faster-whisper (Flask, порт 8765) | Уже развёрнут на VPS |
-| AI | Claude API (claude-sonnet-4) | Лучшее понимание контекста, русский язык |
-| Storage (MVP) | JSON-файлы / SQLite | Простота, без инфраструктуры |
-| Хостинг | VPS 37.233.82.205, user xander_bot | Существующий сервер |
+---
 
-## Структура проекта
+## Tech Stack
 
-```
-voice-task-bot/
-├── src/
-│   ├── bot.js              # Точка входа, инициализация Telegram бота
-│   ├── handlers/
-│   │   └── voice.js        # Обработчик голосовых сообщений
-│   ├── services/
-│   │   ├── transcription.js # Клиент faster-whisper (порт 8765)
-│   │   └── taskExtractor.js # Claude API: экстракция задач
-│   └── utils/
-│       └── telegram.js     # Форматирование и отправка ответов
-├── prompts/
-│   └── task-extraction.md  # Системный промпт для Claude
-├── .env                    # TELEGRAM_BOT_TOKEN, ANTHROPIC_API_KEY
-├── package.json
-└── CLAUDE.md
-```
+**Runtime:** Node.js v22 (ESM — `"type": "module"` in package.json)
+- **Why:** Already on VPS, unified stack, modern ESM support
 
-## Модель данных (MVP)
+**Telegram framework:** grammy
+- **Why:** Lightweight, ESM-native, excellent documentation, MIT license, free
 
-Состояние не хранится между сессиями в MVP. Каждый запрос обрабатывается независимо.
+**LLM (task extraction):** GigaChat API (GigaChat-2) — behind an LLM provider abstraction
+- **Why:** Free tier (1M tokens/year), excellent Russian language support including slang and conversational speech, no VPN needed, registration with Russian phone number, payment in rubles
+- **Abstraction:** Single interface for LLM provider. GigaChat is the default; can be swapped to DeepSeek, Claude, or others by changing config
 
-```
-VoiceMessage {
-  file_id: string       # Telegram file ID
-  duration: number      # секунды
-}
+**STT:** faster-whisper (Flask server, port 8765) — already deployed on VPS
+- **Why:** Self-hosted, free, good Russian speech recognition
 
-TranscriptionResult {
-  text: string          # сырой транскрипт
-  language: string      # определённый язык
-}
+**Database:** SQLite
+- **Why:** Simple, no infrastructure needed, stores feedback ratings and trial counters, easy export to CSV
 
-TaskList {
-  tasks: Task[]
-  raw_transcript: string
-}
+**Hosting:** VPS 37.233.82.205, user `xander_bot`
 
-Task {
-  id: number
-  text: string          # формулировка задачи
-  depends_on: number[]  # ID задач-зависимостей
-  type: 'action' | 'clarification' | 'contact'
-}
-```
+---
 
-## Архитектура обработки
+## Project Structure
 
-```
-Telegram Voice Message
-        ↓
-[1] Скачать файл (Telegram API)
-        ↓
-[2] Отправить в faster-whisper (HTTP POST :8765)
-        ↓ транскрипт
-[3] Отправить в Claude API с системным промптом
-        ↓ структурированный список задач
-[4] Отформатировать и отправить пользователю
-```
+Entry point is `src/index.js` — validates env, builds dependencies, creates bot via `src/bot.js`, registers handlers, starts polling.
 
-## Системный промпт — ключевой элемент
+`src/bot.js` — Creates grammy bot instance with session middleware, /start handler, non-voice catch-all, and global error handler. Does NOT register domain handlers.
 
-Промпт для Claude выполняет:
-1. **Фильтрацию мусора** — убирает "ааа", "короче", "ну", паузы-заполнители
-2. **Экстракцию намерений** — что человек хочет сделать, даже если сформулировано криво
-3. **Разрешение неопределённостей** — размытый референс → явная задача-уточнение
-4. **Упорядочивание** — зависимости между шагами (нельзя позвонить тому, кого не знаешь)
-5. **Формат вывода** — нумерованный список, глаголы действия, конкретные исполнители
+**`src/handlers/`** — Telegram message handlers. `voice.js` orchestrates the full voice-to-tasks pipeline. `feedback.js` handles rating callbacks, comment collection, voice consent, and the 4-question trial survey.
 
-### Принципы промпта:
-- Не придумывать лишнего — только то, что явно или логически следует из голосового
-- Неизвестный человек → задача "уточнить", не гадать
-- Каждый шаг — конкретное действие одного человека
-- Максимальная конкретность при минимальной интерпретации
+**`src/services/`** — Business logic services. `transcription.js` wraps the faster-whisper HTTP client. `llm/` directory contains the LLM provider abstraction (`provider.js`) and implementations (`gigachat.js`). `taskExtractor.js` orchestrates task extraction using the LLM provider.
 
-## Взаимодействие с существующей инфраструктурой
+**`src/db/`** — SQLite database connection, queries, and migrations.
 
-- **faster-whisper** уже запущен на порту 8765, принимает аудиофайл, возвращает транскрипт
-- **n8n** (порт 5678) — в MVP не используется, в v2 возможна интеграция
-- **Деплой** — systemd service, аналогично другим ботам на VPS
+**`src/utils/`** — Helpers for formatting and sending Telegram responses.
 
-## Зависимости
+**`prompts/`** — System prompts as separate markdown files (iterable without code changes). `task-extraction.md` is the main prompt for LLM task extraction.
 
-```json
-{
-  "grammy": "^1.x",
-  "@anthropic-ai/sdk": "^0.x",
-  "node-fetch": "^3.x",
-  "form-data": "^4.x",
-  "dotenv": "^16.x"
-}
-```
+---
+
+## Key Dependencies
+
+**Critical packages:**
+- `grammy` — Telegram Bot API framework
+- `better-sqlite3` — SQLite driver for Node.js (synchronous, fast)
+- `node-fetch` — HTTP client for faster-whisper and GigaChat API calls
+- `dotenv` — Environment variable loading
+
+---
+
+## External Integrations
+
+**Telegram Bot API**
+- **Purpose:** Receive voice messages, send task lists back to user
+- **Auth method:** Bot token from @BotFather in `TELEGRAM_BOT_TOKEN` env var
+
+**GigaChat API**
+- **Purpose:** Extract structured tasks from transcribed speech + survey answer sanity checks
+- **Auth method:** OAuth2 client credentials flow. `GIGACHAT_AUTH_KEY` env var (base64-encoded client credentials for Basic auth). Token refreshed automatically.
+
+**faster-whisper**
+- **Purpose:** Speech-to-text transcription
+- **Auth method:** No auth — local service on same VPS, `WHISPER_URL=http://localhost:8765`
+
+---
+
+## Data Flow
+
+User sends voice message in Telegram → bot downloads audio file via Telegram API → sends audio to faster-whisper (HTTP POST to port 8765) → receives text transcript → sends transcript to GigaChat API with system prompt for task extraction → receives structured task list → formats as numbered list → sends back to user in same chat → asks for 1-5 feedback rating.
+
+---
+
+## Data Model
+
+**Database:** SQLite (via better-sqlite3)
+
+### Main Tables
+
+**users**
+- Purpose: User registry with usage statistics
+- Key fields: `id`, `telegram_user_id`, `telegram_username`, `first_seen_at`, `last_active_at`, `total_voice_count`, `trial_remaining` (default 30), `trial_phase` (1=first 30, 2=bonus 20 after survey, 3=exhausted), `survey_progress` (0-4), `survey_blocked` (0/1)
+- Relationships: `users.id → voice_requests.user_id`, `users.id → survey_responses.user_id`
+
+**voice_requests**
+- Purpose: Log of processed voice messages for analytics and trial counting
+- Key fields: `id`, `user_id`, `telegram_file_id`, `duration_seconds`, `task_count`, `audio_path` (nullable, stored only with consent), `created_at`
+- Relationships: `voice_requests.user_id → users.id`, `voice_requests.id → feedback.voice_request_id`
+
+**feedback**
+- Purpose: User feedback after each voice message processing
+- Key fields: `id`, `voice_request_id`, `rating` (1-5), `comment` (nullable, requested when rating < 5), `voice_consent` (boolean, whether user consented to voice review), `created_at`
+- Relationships: `feedback.voice_request_id → voice_requests.id`
+
+### Key Constraints
+
+- **Required fields:** `users`: `telegram_user_id`, `first_seen_at`. `voice_requests`: `user_id`, `created_at`. `feedback`: `voice_request_id`, `rating`. `survey_responses`: `user_id`, `question_num`, `answer`.
+- **Rating range:** `feedback.rating` CHECK (1-5)
+- **Foreign keys:** `voice_requests.user_id → users.id`, `feedback.voice_request_id → voice_requests.id`, `survey_responses.user_id → users.id`
+- **Unique constraints:** `users.telegram_user_id` must be unique
+
+**survey_responses**
+- Purpose: Stores answers to the 4-question trial survey with LLM sanity check results
+- Key fields: `id`, `user_id`, `question_num` (1-4), `answer`, `is_adequate` (0/1), `rejection_reason` (nullable: 'heuristic' or 'llm'), `created_at`
+- Relationships: `survey_responses.user_id → users.id`
+
+### Migration Strategy
+
+**Tool:** Manual SQL scripts in `src/db/migrations/`
+**Process:** Migrations run automatically on bot startup. Each migration file has a sequence number prefix.
+
+### Sensitive Data
+
+**PII fields:**
+- `users.telegram_user_id` — Telegram user identifier
+- `users.telegram_username` — Telegram username
+- `voice_requests.audio_path` — Original voice file (stored only with explicit user consent, per-message)

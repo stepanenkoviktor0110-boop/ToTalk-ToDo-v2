@@ -1,80 +1,128 @@
-# Deployment: VoiceTask Bot
+# Deployment & Operations
 
-## Платформа
+## Purpose
+Deployment process, infrastructure, and production operations for AI agents.
 
-- **VPS:** 37.233.82.205, user `xander_bot`, Ubuntu 24.04
-- **Runtime:** Node.js v22.22.1
-- **Процесс-менеджер:** systemd service (аналогично другим ботам на сервере)
+---
 
-## Переменные окружения (.env)
+## Deployment Platform
 
-```
-TELEGRAM_BOT_TOKEN=       # токен бота от @BotFather
-ANTHROPIC_API_KEY=        # ключ Claude API
-WHISPER_URL=http://localhost:8765  # faster-whisper уже запущен
-NODE_ENV=production
-```
+**Platform:** VPS (Ubuntu 24.04)
 
-## Зависимости на VPS
+**Type:** systemd service (same as other bots on this server)
 
-| Сервис | Статус | Порт |
-|--------|--------|------|
-| faster-whisper (Flask) | ✅ запущен | 8765 |
-| n8n | ✅ запущен | 5678 |
-| Node.js v22 | ✅ установлен | — |
+**Why this platform:** Existing server with Node.js and faster-whisper already running. Full server control, no additional costs.
 
-faster-whisper уже развёрнут и обрабатывает голосовые — **не нужно поднимать заново**.
+---
+
+## Access Information
+
+**SSH Access:**
+- Production: `ssh xander_bot@37.233.82.205`
+
+**Credentials location:** `.env` file on VPS at `/home/xander_bot/totalk-todo/.env`
+
+---
+
+## Environment Variables
+
+**See:** [.env.example](../../.env.example) in project root
+
+| Variable | Purpose |
+|----------|---------|
+| `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather |
+| `GIGACHAT_AUTH_KEY` | GigaChat OAuth2 credentials (base64-encoded client credentials for Basic auth) |
+| `GIGACHAT_MODEL` | GigaChat model name (default: `GigaChat-2`) |
+| `WHISPER_URL` | faster-whisper endpoint (default: `http://localhost:8765`) |
+| `DB_PATH` | SQLite database file path (default: `data/bot.db`) |
+
+---
+
+## Deployment Triggers
+
+**Production:** Manual deploy via SSH — `git pull origin main && npm install --production && systemctl restart totalk-todo`
+
+**Staging:** Not configured. Development happens on `dev` branch, tested locally or on VPS directly.
+
+---
+
+## Pre-Deploy Checklist
+
+- [ ] Run `npm test` locally before pushing
+- [ ] Verify env vars set on VPS if new ones were added
+- [ ] Check faster-whisper is running: `systemctl is-active faster-whisper`
+
+---
+
+## Rollback Procedure
+
+**Platform rollback:** `git checkout <prev-commit> && npm install --production && systemctl restart totalk-todo`
+
+**Approximate time:** ~2 minutes
+
+---
+
+## Environments
+
+**Production:** VPS 37.233.82.205 — Deploys from `main` branch
+
+**Working directory:** `/home/xander_bot/totalk-todo/`
+
+---
 
 ## Systemd Service
 
-Файл: `/etc/systemd/system/voice-task-bot.service`
+File: `/etc/systemd/system/totalk-todo.service`
 
 ```ini
 [Unit]
-Description=VoiceTask Telegram Bot
+Description=ToTalk-ToDo Telegram Bot
 After=network.target
 
 [Service]
 Type=simple
 User=xander_bot
-WorkingDirectory=/home/xander_bot/voice-task-bot
-ExecStart=/usr/bin/node src/bot.js
+WorkingDirectory=/home/xander_bot/totalk-todo
+ExecStart=/usr/bin/node src/index.js
 Restart=on-failure
 RestartSec=10
-EnvironmentFile=/home/xander_bot/voice-task-bot/.env
+EnvironmentFile=/home/xander_bot/totalk-todo/.env
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-## Deploy процедура (ручной деплой, MVP)
+---
 
-```bash
-# На VPS
-cd /home/xander_bot/voice-task-bot
-git pull origin main
-npm install --production
-systemctl restart voice-task-bot
-systemctl status voice-task-bot
-```
+## Existing Services on VPS
 
-## Мониторинг
+| Service | Status | Port |
+|---------|--------|------|
+| faster-whisper (Flask) | Running | 8765 |
+| n8n | Running | 5678 |
+| Node.js v22 | Installed | — |
 
-```bash
-# Логи
-journalctl -u voice-task-bot -f
+faster-whisper is already deployed and processing voice — **no need to set up again**.
 
-# Проверка, что бот живой
-systemctl is-active voice-task-bot
-```
+---
 
-## Директория на VPS
+## Monitoring & Observability
 
-```
-/home/xander_bot/voice-task-bot/
-```
+### Logging
+
+**Where:** journalctl (`journalctl -u totalk-todo -f`)
+**Format:** Default console output
+
+### Error Tracking
+
+**Tool:** None configured in MVP
+**Config:** Logs to stdout only, visible via journalctl
+
+### Health Checks
+
+**Endpoint:** None in MVP
+**Checks:** `systemctl is-active totalk-todo`
 
 ## CI/CD
 
-В MVP — ручной деплой через SSH. 
-GitHub Actions — в v2 (после стабилизации кода).
+Manual deploy in MVP. GitHub Actions planned for v2 after code stabilization.

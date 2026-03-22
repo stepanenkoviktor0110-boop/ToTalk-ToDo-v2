@@ -1,54 +1,59 @@
-# Project: VoiceTask Bot
+# Project Context
 
-## Назначение
+## Purpose
+This file provides high-level project overview for AI agents. Helps agents understand WHAT we're building and WHY.
 
-Telegram-бот, который принимает голосовые сообщения и превращает их в чёткий список последовательных действий — без словесного мусора, с разрешением неопределённых ссылок и цепочками зависимостей между шагами.
+---
 
-**Ключевая идея:** человек говорит как думает — хаотично, с оговорками, неточными именами, незаконченными мыслями. Бот это понимает и выдаёт не транскрипт, а план действий.
+## Project Overview
 
-## Целевая аудитория
+**Name:** ToTalk-ToDo
 
-- Люди, которым проще надиктовать, чем записать
-- Те, кто теряет мысли в процессе планирования вслух
-- Пользователи с высокой когнитивной нагрузкой (предприниматели, менеджеры)
+**Description:** Telegram bot that converts voice messages into clear, actionable task lists — removing verbal noise, resolving ambiguous references, and ordering tasks by dependencies.
 
-## Ключевые фичи
+The core idea: people speak as they think — chaotically, with hesitations, vague names, and unfinished thoughts. The bot understands this and outputs not a transcript, but an action plan.
 
-### MVP (v1)
-1. **Приём голосового** — бот принимает voice message в Telegram
-2. **Транскрипция** — через faster-whisper на VPS (уже развёрнут, порт 8765)
-3. **Умная экстракция задач** — Claude убирает словесный мусор, выделяет действия
-4. **Разрешение неопределённостей** — бот распознаёт размытые референсы ("ну тот мужик который чинил" → "уточнить имя мастера у Ани") и превращает их в промежуточные задачи
-5. **Цепочки зависимостей** — задачи упорядочиваются логически (нельзя позвонить тому, чей номер ещё не знаешь)
-6. **Вывод** — нумерованный список шагов в Telegram
+---
 
-### v2 (после MVP)
-- Сохранение контекста: бот помнит людей и задачи из прошлых голосовых
-- Редактирование: пользователь может уточнить задачи текстом
-- Интеграция с внешними task-менеджерами (Notion, Todoist)
-- Мультиязычность
+## Target Audience
 
-## Пример работы
+**Primary users:** People who find it easier to dictate than to type — entrepreneurs, managers, anyone with high cognitive load who loses thoughts while planning aloud.
 
-**Вход (голосовое):**
-> "ааа, короче, надо позвонить Ване или не Ване, может он Андрей, Аня точно знает кто это, попросить чтобы он приехал и починил дверь"
+**Use case:** User sends a voice message with a chaotic stream of thoughts. Bot extracts concrete tasks, resolves ambiguities ("that guy who fixed..." → "clarify the repairman's name from Anya"), and returns an ordered action plan.
 
-**Выход (список задач):**
-```
-1. Уточнить у Ани кто помогал с дверью ранее
-2. Связаться с этим человеком и попросить приехать починить дверь
-```
+---
 
-## Scope MVP
+## Core Problem
 
-**В скоупе:**
-- Один пользователь (без multi-user, без авторизации)
-- Только голосовые сообщения Telegram
-- Русский язык (основной)
-- Вывод задач в тот же чат
+Currently, when people dictate tasks or plans, they get either a raw transcript (useless) or have to manually extract actions from their own ramblings. This is tedious and thoughts get lost. ToTalk-ToDo solves this by using STT + LLM to intelligently extract structured tasks from natural speech, including resolving unclear references and ordering by dependencies.
 
-**Вне скоупа MVP:**
-- Персистентная память между сессиями
-- Отслеживание выполнения задач
-- Напоминания
-- Голосовые кружки (video note)
+---
+
+## Key Features
+
+- **Voice-to-tasks pipeline** — Accept voice message → transcribe via faster-whisper → extract tasks via LLM → return numbered action list
+- **Ambiguity resolution** — Detect vague references ("that guy", "or maybe Andrey") and turn them into explicit clarification tasks
+- **Dependency ordering** — Arrange tasks logically (can't call someone whose number you don't know yet)
+- **Multi-voice context** — Multiple voice messages forwarded simultaneously are treated as a single context
+- **Feedback collection** — After each voice message, request 1-5 rating; if below 5, ask for a short comment
+- **User database & usage analytics** — Track all users, their usage statistics (message count, frequency, ratings)
+- **Voice consent for quality improvement** — When user gives low rating, ask consent to listen to original voice message for service improvement. Consent requested each time, no blanket permission. If declined — voice data must not be used.
+
+---
+
+## Out of Scope
+
+- Persistent memory between sessions (v2)
+- Task completion tracking (v2)
+- Reminders and notifications (v2)
+- Video notes (voice circles)
+- Multi-language support (v2)
+- Integration with external task managers — Notion, Todoist (v3)
+- Interrupted context detection — asking "will you continue?" (v2)
+
+## Trial System
+
+- Phase 1: 30 free voice message processings
+- When exhausted: 4-question survey (with LLM sanity check, 2-strike rule, fail-open)
+- Phase 2: +20 more processings after survey completion
+- Phase 3: Full block after all 50 used. Monetization deferred to v2.

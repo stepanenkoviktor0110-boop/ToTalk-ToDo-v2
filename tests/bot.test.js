@@ -44,6 +44,8 @@ describe('bot session', () => {
       voiceRequestId: null,
       awaitingComment: false,
       awaitingConsent: false,
+      pendingRating: null,
+      pendingComment: null,
       inSurvey: false,
       surveyRetries: {},
     });

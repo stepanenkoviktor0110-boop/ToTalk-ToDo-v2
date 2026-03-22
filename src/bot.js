@@ -13,6 +13,8 @@ export function getInitialSession() {
     voiceRequestId: null,
     awaitingComment: false,
     awaitingConsent: false,
+    pendingRating: null,
+    pendingComment: null,
     inSurvey: false,
     surveyRetries: {},
   };
@@ -61,6 +63,8 @@ export function createBot(token, options = {}) {
     if (ctx.message.voice || ctx.message.audio) return next();
     // Skip commands (already handled above)
     if (ctx.message.text && ctx.message.text.startsWith('/')) return next();
+    // Pass through to feedback/survey handler when in active flow (Task 7, Task 8)
+    if (ctx.session.awaitingComment || ctx.session.awaitingConsent || ctx.session.inSurvey) return next();
     await ctx.reply(NON_VOICE_EXPLANATION);
   });
 

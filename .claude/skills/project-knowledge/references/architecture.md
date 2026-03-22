@@ -29,9 +29,11 @@ Technical architecture overview for AI agents. Helps agents understand HOW the s
 
 ## Project Structure
 
-Entry point is `src/bot.js` — initializes grammy bot and registers handlers.
+Entry point is `src/index.js` — validates env, builds dependencies, creates bot via `src/bot.js`, registers handlers, starts polling.
 
-**`src/handlers/`** — Telegram message handlers. `voice.js` orchestrates the full voice-to-tasks pipeline.
+`src/bot.js` — Creates grammy bot instance with session middleware, /start handler, non-voice catch-all, and global error handler. Does NOT register domain handlers.
+
+**`src/handlers/`** — Telegram message handlers. `voice.js` orchestrates the full voice-to-tasks pipeline. `feedback.js` handles rating callbacks, comment collection, voice consent, and the 4-question trial survey.
 
 **`src/services/`** — Business logic services. `transcription.js` wraps the faster-whisper HTTP client. `llm/` directory contains the LLM provider abstraction (`provider.js`) and implementations (`gigachat.js`). `taskExtractor.js` orchestrates task extraction using the LLM provider.
 
@@ -60,8 +62,8 @@ Entry point is `src/bot.js` — initializes grammy bot and registers handlers.
 - **Auth method:** Bot token from @BotFather in `TELEGRAM_BOT_TOKEN` env var
 
 **GigaChat API**
-- **Purpose:** Extract structured tasks from transcribed speech
-- **Auth method:** OAuth2 client credentials flow. `GIGACHAT_CLIENT_ID` and `GIGACHAT_CLIENT_SECRET` env vars. Token refreshed automatically.
+- **Purpose:** Extract structured tasks from transcribed speech + survey answer sanity checks
+- **Auth method:** OAuth2 client credentials flow. `GIGACHAT_AUTH_KEY` env var (base64-encoded client credentials for Basic auth). Token refreshed automatically.
 
 **faster-whisper**
 - **Purpose:** Speech-to-text transcription
@@ -83,8 +85,8 @@ User sends voice message in Telegram → bot downloads audio file via Telegram A
 
 **users**
 - Purpose: User registry with usage statistics
-- Key fields: `id`, `telegram_user_id`, `telegram_username`, `first_seen_at`, `last_active_at`, `total_voice_count`, `trial_remaining`
-- Relationships: `users.id → voice_requests.user_id`
+- Key fields: `id`, `telegram_user_id`, `telegram_username`, `first_seen_at`, `last_active_at`, `total_voice_count`, `trial_remaining` (default 30), `trial_phase` (1=first 30, 2=bonus 20 after survey, 3=exhausted), `survey_progress` (0-4), `survey_blocked` (0/1)
+- Relationships: `users.id → voice_requests.user_id`, `users.id → survey_responses.user_id`
 
 **voice_requests**
 - Purpose: Log of processed voice messages for analytics and trial counting
@@ -98,10 +100,15 @@ User sends voice message in Telegram → bot downloads audio file via Telegram A
 
 ### Key Constraints
 
-- **Required fields:** `users`: `telegram_user_id`, `first_seen_at`. `voice_requests`: `user_id`, `created_at`. `feedback`: `voice_request_id`, `rating`.
+- **Required fields:** `users`: `telegram_user_id`, `first_seen_at`. `voice_requests`: `user_id`, `created_at`. `feedback`: `voice_request_id`, `rating`. `survey_responses`: `user_id`, `question_num`, `answer`.
 - **Rating range:** `feedback.rating` CHECK (1-5)
-- **Foreign keys:** `voice_requests.user_id → users.id`, `feedback.voice_request_id → voice_requests.id`
+- **Foreign keys:** `voice_requests.user_id → users.id`, `feedback.voice_request_id → voice_requests.id`, `survey_responses.user_id → users.id`
 - **Unique constraints:** `users.telegram_user_id` must be unique
+
+**survey_responses**
+- Purpose: Stores answers to the 4-question trial survey with LLM sanity check results
+- Key fields: `id`, `user_id`, `question_num` (1-4), `answer`, `is_adequate` (0/1), `rejection_reason` (nullable: 'heuristic' or 'llm'), `created_at`
+- Relationships: `survey_responses.user_id → users.id`
 
 ### Migration Strategy
 

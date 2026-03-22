@@ -53,4 +53,7 @@ Currently, when people dictate tasks or plans, they get either a raw transcript 
 
 ## Trial System
 
-- 30 free voice messages → feedback request → 20 more free → after that 10/day or package deals (v2 monetization)
+- Phase 1: 30 free voice message processings
+- When exhausted: 4-question survey (with LLM sanity check, 2-strike rule, fail-open)
+- Phase 2: +20 more processings after survey completion
+- Phase 3: Full block after all 50 used. Monetization deferred to v2.

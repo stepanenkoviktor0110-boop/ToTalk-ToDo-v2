@@ -7,7 +7,7 @@
 
 const DEFAULT_WHISPER_URL = 'http://localhost:8765/v1/audio/transcriptions';
 const DEFAULT_WHISPER_MODEL = 'Systran/faster-whisper-small';
-const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_TIMEOUT_MS = 300_000; // 5 min — CPU whisper ~2× realtime, 2-min audio needs ~240s
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 

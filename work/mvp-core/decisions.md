@@ -149,3 +149,39 @@ Review details — in JSON files via links. QA report — in logs/working/.
 
 **Verification:**
 - `npm test` → 78 passed (62 existing + 16 new voice handler tests)
+
+---
+
+## Task 7: Feedback Flow + Voice Consent
+
+**Status:** Done
+**Commit:** (uncommitted, on dev branch)
+**Agent:** main agent
+**Summary:** Created `src/handlers/feedback.js` with full feedback pipeline: inline keyboard callbacks for 1-5 ratings (rate:5 saves immediately, rate:<5 asks comment), text comment collection, voice consent prompt (Yes/No buttons), audio file saving on consent (download from Telegram, save to `data/voices/{id}.oga`, update `audio_path` in DB). Session state tracks `voiceRequestId` to associate feedback with correct voice_request. Added `getVoiceRequest` query, 6 message constants, updated catch-all to pass through feedback states. Fixed pre-existing bug: `sendChatAction` mock missing in voice tests.
+**Deviations:** Added `pendingRating` and `pendingComment` to session state (not in original tech-spec session contract) — needed to store intermediate values between comment and consent steps.
+
+**Reviews:**
+
+(no review round — direct implementation)
+
+**Verification:**
+- `npm test` → 84/85 passed (1 pre-existing truncation test failure)
+- Syntax check all modified files → OK
+
+---
+
+## Task 8: Trial System + Survey Form
+
+**Status:** Done
+**Commit:** (uncommitted, on dev branch)
+**Agent:** main agent
+**Summary:** Added survey pipeline to `feedback.js`: 4 sequential questions with heuristic gate (Q1-Q3: min 5 words, no punctuation-only; Q4: single digit 1-5) + LLM sanity check via GigaChat (fail-open on error). 2-strike rule per question — first garbage → retry prompt, second → permanent `survey_blocked=1` with console.log. Survey state: `inSurvey` in session, `survey_progress` in DB for resumption. Updated `voice.js` to trigger survey when `trial_remaining=0` and user eligible (phase=1, not blocked, progress<4). Added 5 survey messages + `formatSurveyQuestion()` to messages.js. Updated bot.js catch-all, index.js deps.
+**Deviations:** None
+
+**Reviews:**
+
+(no review round — direct implementation)
+
+**Verification:**
+- `npm test` → 84/85 passed (same 1 pre-existing failure)
+- Syntax check all modified files → OK

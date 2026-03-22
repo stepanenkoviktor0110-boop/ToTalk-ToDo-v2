@@ -55,3 +55,54 @@ export function partialFailureNote(failed, total) {
 export function formatTaskList(tasks) {
   return tasks.map((t, i) => `${i + 1}. ${t}`).join('\n');
 }
+
+// ── Feedback flow messages ──────────────────────────────────────────────────
+
+export const FEEDBACK_THANKS =
+  'Спасибо за оценку!';
+
+export const FEEDBACK_ASK_COMMENT =
+  'Что можно улучшить? Напиши текстом.';
+
+export const FEEDBACK_ASK_CONSENT =
+  'Можно ли сохранить твоё голосовое сообщение для улучшения качества?';
+
+export const FEEDBACK_SAVED =
+  'Спасибо за обратную связь!';
+
+export const FEEDBACK_EXPIRED =
+  'Эта оценка уже не актуальна.';
+
+export const FEEDBACK_PRESS_BUTTON =
+  'Нажми одну из кнопок выше.';
+
+// ── Survey flow messages ────────────────────────────────────────────────────
+
+export const SURVEY_INTRO =
+  'Лимит бесплатных обработок исчерпан.\n' +
+  'Ответь на 4 коротких вопроса о боте — получишь ещё 20 голосовых.';
+
+export const SURVEY_RETRY =
+  'Пожалуйста, ответь более развёрнуто и по теме.';
+
+export const SURVEY_BLOCKED =
+  'К сожалению, дополнительные голосовые недоступны.';
+
+export const SURVEY_COMPLETE =
+  'Спасибо за ответы! Тебе начислено ещё 20 обработок голосовых.';
+
+export const SURVEY_QUESTIONS = [
+  'Что тебе понравилось в боте?',
+  'Что не понравилось или работало плохо?',
+  'Чего не хватает?',
+  'Общая оценка от 1 до 5',
+];
+
+/**
+ * Format a survey question with progress indicator.
+ * @param {number} index - 0-based question index
+ * @returns {string}
+ */
+export function formatSurveyQuestion(index) {
+  return `Вопрос ${index + 1}/4: ${SURVEY_QUESTIONS[index]}`;
+}

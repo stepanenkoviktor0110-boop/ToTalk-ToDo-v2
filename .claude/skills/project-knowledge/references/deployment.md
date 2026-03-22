@@ -31,10 +31,10 @@ Deployment process, infrastructure, and production operations for AI agents.
 | Variable | Purpose |
 |----------|---------|
 | `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather |
-| `GIGACHAT_CLIENT_ID` | GigaChat API client ID |
-| `GIGACHAT_CLIENT_SECRET` | GigaChat API client secret |
+| `GIGACHAT_AUTH_KEY` | GigaChat OAuth2 credentials (base64-encoded client credentials for Basic auth) |
+| `GIGACHAT_MODEL` | GigaChat model name (default: `GigaChat-2`) |
 | `WHISPER_URL` | faster-whisper endpoint (default: `http://localhost:8765`) |
-| `NODE_ENV` | Environment (`production` / `development`) |
+| `DB_PATH` | SQLite database file path (default: `data/bot.db`) |
 
 ---
 
@@ -83,7 +83,7 @@ After=network.target
 Type=simple
 User=xander_bot
 WorkingDirectory=/home/xander_bot/totalk-todo
-ExecStart=/usr/bin/node src/bot.js
+ExecStart=/usr/bin/node src/index.js
 Restart=on-failure
 RestartSec=10
 EnvironmentFile=/home/xander_bot/totalk-todo/.env

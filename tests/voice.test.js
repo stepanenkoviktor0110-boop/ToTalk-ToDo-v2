@@ -40,6 +40,7 @@ function makeCtx({
       getFile: jest.fn().mockResolvedValue({
         file_path: 'voice/file_0.oga',
       }),
+      sendChatAction: jest.fn().mockResolvedValue(true),
     },
     reply: jest.fn().mockResolvedValue({ message_id: 99 }),
   };
