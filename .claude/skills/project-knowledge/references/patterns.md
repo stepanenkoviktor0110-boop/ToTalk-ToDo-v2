@@ -100,8 +100,8 @@ None configured yet.
 
 - No tasks detected → inform user explicitly, don't return empty list silently
 - Max 10 tasks per voice message — if more, ask user to split into shorter messages
-- Processing > 30 seconds → send intermediate status ("processing...")
-- Voice > 3 minutes → warn about longer processing time
+- Processing > 5 seconds → send status message ("Обрабатываю голосовое..."), auto-deleted when done
+- Voice > 3 minutes → warn about longer processing time before processing starts
 - Feedback flow (Decision 9): after each task list, show 1-5 rating buttons. Rating=5 → save and thank. Rating<5 → ask text comment → ask voice consent (Yes/No buttons) → save feedback. New voice during pending feedback silently abandons it.
 - Voice consent: after comment, ask consent to save original audio for quality improvement. If yes → download audio, save to `data/voices/{id}.oga`, set `audio_path` in DB. If no → `voice_consent=0`, no audio saved.
 - User tracking: register every user on first interaction, track usage statistics (total messages, last active, trial remaining).
