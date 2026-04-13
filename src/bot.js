@@ -17,6 +17,10 @@ export function getInitialSession() {
     pendingComment: null,
     inSurvey: false,
     surveyRetries: {},
+    // Action button state (Tasks → Summary choice after transcription)
+    awaitingAction: false,
+    pendingAction: null,
+    transcript: null,
   };
 }
 

@@ -25,7 +25,7 @@ describe('upsertUser', () => {
     expect(user).toBeDefined();
     expect(user.telegram_user_id).toBe(12345);
     expect(user.telegram_username).toBe('testuser');
-    expect(user.trial_remaining).toBe(30);
+    expect(user.trial_remaining).toBe(20);
     expect(user.trial_phase).toBe(1);
     expect(user.survey_progress).toBe(0);
     expect(user.total_voice_count).toBe(0);
@@ -113,7 +113,7 @@ describe('decrementTrial', () => {
   it('returns new value', () => {
     const user = upsertUser(12345, 'testuser');
     const newVal = decrementTrial(user.id);
-    expect(newVal).toBe(29);
+    expect(newVal).toBe(19);
   });
 
   it('does not go below 0', () => {
@@ -131,8 +131,8 @@ describe('trial counter operations', () => {
   it('full lifecycle', () => {
     const user = upsertUser(12345, 'testuser');
 
-    // Decrement from 30 to 0
-    for (let i = 29; i >= 0; i--) {
+    // Decrement from 20 to 0
+    for (let i = 19; i >= 0; i--) {
       const val = decrementTrial(user.id);
       expect(val).toBe(i);
     }
@@ -141,11 +141,11 @@ describe('trial counter operations', () => {
     const atZero = getUserByTelegramId(12345);
     expect(atZero.trial_remaining).toBe(0);
 
-    // Complete survey -> phase 2, trial_remaining = 20
+    // Complete survey -> phase 2, trial_remaining = 10
     completeSurvey(user.id);
     const afterSurvey = getUserByTelegramId(12345);
     expect(afterSurvey.trial_phase).toBe(2);
-    expect(afterSurvey.trial_remaining).toBe(20);
+    expect(afterSurvey.trial_remaining).toBe(10);
 
     // Exhaust trial -> phase 3, trial_remaining = 0
     exhaustTrial(user.id);

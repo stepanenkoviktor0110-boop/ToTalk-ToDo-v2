@@ -43,6 +43,14 @@ export const BATCH_LIMIT_NOTE =
 export const TRANSCRIPT_TRUNCATED_NOTE =
   '\n\n⚠️ Текст был сокращён из-за ограничений по длине.';
 
+// ── Action button messages (post-transcription) ──────────────────────────────
+
+export const ACTION_KEYBOARD = 'Что сделать с расшифровкой?';
+export const ACTION_TASKS_BTN = '📋 Извлечь задачи';
+export const ACTION_SUMMARY_BTN = '📝 Сделать резюме';
+export const ACTION_EXPIRED = 'Выбор устарел — отправь голосовое заново.';
+export const SUMMARY_THANKS = 'Готово. Если нужно ещё что-то — отправляй голосовое!';
+
 /**
  * Build partial failure note.
  * @param {number} failed - number of failed voices

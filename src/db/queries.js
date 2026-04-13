@@ -9,8 +9,8 @@ import { getDb } from './index.js';
 export function upsertUser(telegramUserId, telegramUsername) {
   const db = getDb();
   db.prepare(`
-    INSERT INTO users (telegram_user_id, telegram_username)
-    VALUES (?, ?)
+    INSERT INTO users (telegram_user_id, telegram_username, trial_remaining)
+    VALUES (?, ?, 20)
     ON CONFLICT(telegram_user_id) DO UPDATE SET
       telegram_username = excluded.telegram_username,
       last_active_at = CURRENT_TIMESTAMP
@@ -38,9 +38,9 @@ export function createVoiceRequest(userId, fileId, durationSeconds) {
 /**
  * Update specified fields on a voice request.
  * @param {number} id - Voice request ID
- * @param {object} fields - Fields to update: { taskCount, transcriptLength, audioPath }
+ * @param {object} fields - Fields to update: { taskCount, transcriptLength, audioPath, actionType, summaryLength }
  */
-export function updateVoiceRequest(id, { taskCount, transcriptLength, audioPath } = {}) {
+export function updateVoiceRequest(id, { taskCount, transcriptLength, audioPath, actionType, summaryLength } = {}) {
   const db = getDb();
   const sets = [];
   const values = [];
@@ -56,6 +56,14 @@ export function updateVoiceRequest(id, { taskCount, transcriptLength, audioPath 
   if (audioPath !== undefined && audioPath !== null) {
     sets.push('audio_path = ?');
     values.push(audioPath);
+  }
+  if (actionType !== undefined && actionType !== null) {
+    sets.push('action_type = ?');
+    values.push(actionType);
+  }
+  if (summaryLength !== undefined && summaryLength !== null) {
+    sets.push('summary_length = ?');
+    values.push(summaryLength);
   }
 
   if (sets.length === 0) return;
@@ -143,11 +151,11 @@ export function advanceSurveyProgress(userId) {
 }
 
 /**
- * Complete the survey: set trial_phase=2, trial_remaining=20.
+ * Complete the survey: set trial_phase=2, trial_remaining=10.
  * @param {number} userId
  */
 export function completeSurvey(userId) {
-  getDb().prepare('UPDATE users SET trial_phase = 2, trial_remaining = 20 WHERE id = ?').run(userId);
+  getDb().prepare('UPDATE users SET trial_phase = 2, trial_remaining = 10 WHERE id = ?').run(userId);
 }
 
 /**

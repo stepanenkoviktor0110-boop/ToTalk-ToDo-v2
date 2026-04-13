@@ -29,6 +29,12 @@ import {
   SURVEY_COMPLETE,
   SURVEY_QUESTIONS,
   formatSurveyQuestion,
+  ACTION_EXPIRED,
+  NO_TASKS_FOUND,
+  TOO_MANY_TASKS,
+  GENERIC_ERROR,
+  SUMMARY_THANKS,
+  formatTaskList,
 } from '../utils/messages.js';
 
 const VOICES_DIR = join(process.cwd(), 'data', 'voices');
@@ -282,6 +288,154 @@ export async function enterSurvey(ctx, user) {
   await ctx.reply(intro + formatSurveyQuestion(questionIndex));
 }
 
+// ── Action button handlers (post-transcription choice) ────────────────────────
+
+/**
+ * System prompt for voice summary generation.
+ * First-person summary of the voice transcript.
+ */
+const SUMMARY_SYSTEM_PROMPT =
+  'Ты делаешь краткое резюме голосового сообщения. ' +
+  'Пиши от первого лица, как если бы говорящий сам сформулировал свои мысли. ' +
+  'Убери словесный мусор, повторы, ложные старты. ' +
+  'Выведи 2-5 ключевых пунктов в виде маркированного списка. ' +
+  'Если голосовое было о задачах — упомяни их кратко. ' +
+  'Если это статус или наблюдение — передай суть. ' +
+  'Не выдумывай факты, которых не было в транскрипте.';
+
+/**
+ * Handle "action:tasks" callback — run task extraction on stored transcript.
+ * @param {object} ctx - grammy callback query context
+ * @param {object} deps - injected dependencies
+ */
+async function handleActionTasks(ctx, deps) {
+  if (!ctx.session.awaitingAction) {
+    await ctx.answerCallbackQuery({ text: ACTION_EXPIRED });
+    return;
+  }
+
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageReplyMarkup({ reply_markup: null });
+
+  ctx.session.awaitingAction = false;
+  ctx.session.pendingAction = 'tasks';
+
+  const transcript = ctx.session.transcript;
+  if (!transcript) {
+    await ctx.reply(GENERIC_ERROR);
+    return;
+  }
+
+  // Run task extraction
+  let result;
+  try {
+    result = await deps.extractTasks([transcript], deps.llmProvider);
+  } catch (err) {
+    const ts = new Date().toISOString();
+    console.error(`[${ts}] task extraction failed: userId=${ctx.from.id}, errorType=${err.constructor.name}`);
+    await ctx.reply(GENERIC_ERROR);
+    return;
+  }
+
+  // Handle special markers
+  if (result.marker === 'no_tasks') {
+    await ctx.reply(NO_TASKS_FOUND);
+    return;
+  }
+  if (result.marker === 'too_many_tasks') {
+    await ctx.reply(TOO_MANY_TASKS);
+    return;
+  }
+  if (result.marker === 'summary') {
+    await ctx.reply(`📝 ${result.summary}`);
+    return;
+  }
+  if (result.tasks.length === 0) {
+    await ctx.reply(NO_TASKS_FOUND);
+    return;
+  }
+
+  // Send task list with rating buttons
+  const message = formatTaskList(result.tasks);
+  if (result.truncated) {
+    message += '\n\n⚠️ Текст был сокращён из-за ограничений по длине.';
+  }
+
+  const keyboard = new InlineKeyboard()
+    .text('1', 'rate:1').text('2', 'rate:2').text('3', 'rate:3')
+    .text('4', 'rate:4').text('5', 'rate:5');
+
+  await ctx.reply(message, { reply_markup: keyboard });
+
+  // Update DB with action type and task count
+  deps.updateVoiceRequest(ctx.session.voiceRequestId, {
+    actionType: 'tasks',
+    taskCount: result.tasks.length,
+  });
+
+  // Decrement trial and set feedback state
+  deps.decrementTrial(ctx.from.id);
+  ctx.session.awaitingFeedback = true;
+
+  const ts = new Date().toISOString();
+  console.log(`[${ts}] action=tasks: userId=${ctx.from.id}, taskCount=${result.tasks.length}`);
+}
+
+/**
+ * Handle "action:summary" callback — generate summary of stored transcript.
+ * @param {object} ctx - grammy callback query context
+ * @param {object} deps - injected dependencies
+ */
+async function handleActionSummary(ctx, deps) {
+  if (!ctx.session.awaitingAction) {
+    await ctx.answerCallbackQuery({ text: ACTION_EXPIRED });
+    return;
+  }
+
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageReplyMarkup({ reply_markup: null });
+
+  ctx.session.awaitingAction = false;
+  ctx.session.pendingAction = 'summary';
+
+  const transcript = ctx.session.transcript;
+  if (!transcript) {
+    await ctx.reply(GENERIC_ERROR);
+    return;
+  }
+
+  // Generate summary via LLM
+  let summary;
+  try {
+    summary = await deps.llmProvider.complete(SUMMARY_SYSTEM_PROMPT, transcript);
+  } catch (err) {
+    const ts = new Date().toISOString();
+    console.error(`[${ts}] summary generation failed: userId=${ctx.from.id}, errorType=${err.constructor.name}`);
+    await ctx.reply(GENERIC_ERROR);
+    return;
+  }
+
+  if (!summary || !summary.trim()) {
+    await ctx.reply(NO_TASKS_FOUND);
+    return;
+  }
+
+  // Send summary
+  await ctx.reply(`📝 Резюме:\n\n${summary}\n\n${SUMMARY_THANKS}`);
+
+  // Update DB
+  deps.updateVoiceRequest(ctx.session.voiceRequestId, {
+    actionType: 'summary',
+    summaryLength: summary.length,
+  });
+
+  // Decrement trial (no feedback flow for summary)
+  deps.decrementTrial(ctx.from.id);
+
+  const ts = new Date().toISOString();
+  console.log(`[${ts}] action=summary: userId=${ctx.from.id}, summaryLength=${summary.length}`);
+}
+
 // ── Handler registration ────────────────────────────────────────────────────
 
 /**
@@ -294,9 +448,15 @@ export async function enterSurvey(ctx, user) {
  * @param {object} deps - dependency bag
  */
 export function registerFeedbackHandler(bot, deps) {
-  // Callback queries: ratings and consent buttons
+  // Callback queries: action buttons, ratings, and consent buttons
   bot.on('callback_query:data', async (ctx, next) => {
     const data = ctx.callbackQuery.data;
+    if (data === 'action:tasks') {
+      return handleActionTasks(ctx, deps);
+    }
+    if (data === 'action:summary') {
+      return handleActionSummary(ctx, deps);
+    }
     if (data.startsWith('rate:')) {
       return handleRating(ctx, deps);
     }
@@ -338,3 +498,6 @@ export function registerFeedbackHandler(bot, deps) {
     return next();
   });
 }
+
+// Export action handlers for testing
+export { handleActionTasks, handleActionSummary };

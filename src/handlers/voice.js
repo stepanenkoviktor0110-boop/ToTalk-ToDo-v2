@@ -2,7 +2,8 @@
  * Voice pipeline orchestrator.
  *
  * Downloads audio via Telegram API, transcribes via faster-whisper,
- * extracts tasks via LLM, formats output, sends to user with rating buttons.
+ * shows transcript with action buttons [📋 Извлечь задачи] [📝 Сделать резюме].
+ * User chooses which action to run — task extraction or summary.
  *
  * Implements per-chat debounce buffer (3s) for multi-voice context merging,
  * partial failure handling, and trial enforcement.
@@ -21,7 +22,9 @@ import {
   PROCESSING_STATUS,
   LONG_VOICE_WARNING,
   partialFailureNote,
-  formatTaskList,
+  ACTION_KEYBOARD,
+  ACTION_TASKS_BTN,
+  ACTION_SUMMARY_BTN,
 } from '../utils/messages.js';
 import { enterSurvey } from './feedback.js';
 
@@ -100,16 +103,20 @@ export function handleVoice(ctx, deps) {
   const fileId = voice.file_id;
   const duration = voice.duration || 0;
 
-  // Decision 9: reset pending feedback session
+  // Decision 9: reset pending feedback AND action sessions
   if (
     ctx.session.awaitingFeedback ||
     ctx.session.awaitingComment ||
-    ctx.session.awaitingConsent
+    ctx.session.awaitingConsent ||
+    ctx.session.awaitingAction
   ) {
     ctx.session.awaitingFeedback = false;
     ctx.session.voiceRequestId = null;
     ctx.session.awaitingComment = false;
     ctx.session.awaitingConsent = false;
+    ctx.session.awaitingAction = false;
+    ctx.session.pendingAction = null;
+    ctx.session.transcript = null;
   }
 
   const voiceEntry = { ctx, fileId, duration };
@@ -211,23 +218,21 @@ function buildReplyMessage(result, failedCount, totalCount, batchLimitExceeded) 
 }
 
 /**
- * Persist batch results to the database.
+ * Persist voice request to the database (after transcription, before action choice).
  *
  * @param {{ id: number }} user
  * @param {Array} successfulVoices
- * @param {{ tasks: string[] }} result
  * @param {string} combinedTranscript
  * @param {object} deps
  * @returns {number|null} lastVoiceRequestId
  */
-function persistBatch(user, successfulVoices, result, combinedTranscript, deps) {
+function persistVoiceRequest(user, successfulVoices, combinedTranscript, deps) {
   const { createVoiceRequest, updateVoiceRequest } = deps;
   let lastVoiceRequestId = null;
 
   for (const v of successfulVoices) {
     const vr = createVoiceRequest(user.id, v.fileId, v.duration);
     updateVoiceRequest(vr.id, {
-      taskCount: result.tasks.length,
       transcriptLength: combinedTranscript.length,
     });
     lastVoiceRequestId = vr.id;
@@ -253,14 +258,15 @@ function startTyping(ctx) {
 /**
  * Process a batch of voice messages.
  *
- * Pipeline: trial check → download → transcribe → truncate → extract → format → send → DB
+ * Pipeline: trial check → download → transcribe → show transcript + action buttons
+ * (user chooses: tasks or summary — handled by callback in feedback.js)
  *
  * @param {object} ctx - grammy context (used for reply and session)
  * @param {Array<{ ctx: object, fileId: string, duration: number }>} voices
  * @param {object} deps - injected dependencies
  */
 export async function processVoiceBatch(ctx, voices, deps) {
-  const { extractTasks, upsertUser, decrementTrial } = deps;
+  const { upsertUser } = deps;
 
   // Guard: channel posts may have no ctx.from
   if (!ctx.from) {
@@ -326,68 +332,57 @@ export async function processVoiceBatch(ctx, voices, deps) {
 
   // Build combined transcript for DB storage
   let combinedTranscript = transcripts.join('\n');
-  if (combinedTranscript.length > MAX_TRANSCRIPT_LENGTH) {
+  const wasTruncated = combinedTranscript.length > MAX_TRANSCRIPT_LENGTH;
+  if (wasTruncated) {
     combinedTranscript = combinedTranscript.slice(0, MAX_TRANSCRIPT_LENGTH);
   }
 
-  // Extract tasks — pass array, taskExtractor handles join+truncation
-  let result;
-  try {
-    result = await extractTasks(transcripts, deps.llmProvider);
-  } catch (err) {
-    clearTimeout(statusTimer);
-    stopTyping();
-    await deleteStatusMessage(ctx, statusMessageId);
-    const ts = new Date().toISOString();
-    // Decision 12: generic error type only, no transcript/PII in logs
-    console.error(`[${ts}] task extraction failed: chatId=${ctx.chat.id}, errorType=${err.constructor.name}`);
-    await ctx.reply(GENERIC_ERROR);
-    return;
+  // Show transcript + action buttons
+  const transcriptMsg = wasTruncated
+    ? `🗣 Распознано: ${combinedTranscript}${TRANSCRIPT_TRUNCATED_NOTE}`
+    : `🗣 Распознано: ${combinedTranscript}`;
+
+  if (failedCount > 0) {
+    // Append failure note to transcript message
+    // We'll send it as a follow-up to keep the transcript clean
   }
+
+  const keyboard = new InlineKeyboard()
+    .text(ACTION_TASKS_BTN, 'action:tasks')
+    .text(ACTION_SUMMARY_BTN, 'action:summary');
+
+  // Store transcript in session for callback handler
+  ctx.session.transcript = combinedTranscript;
+
+  // Persist voice request (without action_type yet — set in callback)
+  const lastVoiceRequestId = persistVoiceRequest(user, successfulVoices, combinedTranscript, deps);
+  ctx.session.voiceRequestId = lastVoiceRequestId;
+
+  // Set action state
+  ctx.session.awaitingAction = true;
+  ctx.session.pendingAction = null;
+
+  // Decision 12: log request metadata
+  const durationMs = Date.now() - pipelineStart;
+  const totalDurationSec = processVoices.reduce((sum, v) => sum + v.duration, 0);
+  console.log(
+    `[${new Date().toISOString()}] voice transcribed: userId=${user.id}, voices=${successfulVoices.length}, audioDuration=${totalDurationSec}s, transcriptLength=${combinedTranscript.length}, pipelineMs=${durationMs}`
+  );
 
   clearTimeout(statusTimer);
   stopTyping();
   await deleteStatusMessage(ctx, statusMessageId);
 
-  // Handle special markers
-  if (result.marker === 'no_tasks') {
-    await ctx.reply(NO_TASKS_FOUND);
-    return;
+  // Send transcript with action buttons
+  await ctx.reply(`${transcriptMsg}\n\n${ACTION_KEYBOARD}`, { reply_markup: keyboard });
+
+  // If some voices failed, send note after
+  if (failedCount > 0) {
+    await ctx.reply(partialFailureNote(failedCount, processVoices.length));
   }
-  if (result.marker === 'too_many_tasks') {
-    await ctx.reply(TOO_MANY_TASKS);
-    return;
+  if (batchLimitExceeded) {
+    await ctx.reply('\n\n' + BATCH_LIMIT_NOTE);
   }
-  if (result.marker === 'summary') {
-    await ctx.reply(`📝 ${result.summary}`);
-    return;
-  }
-  if (result.tasks.length === 0) {
-    await ctx.reply(NO_TASKS_FOUND);
-    return;
-  }
-
-  // Build reply, send with rating keyboard, persist to DB
-  const message = buildReplyMessage(result, failedCount, processVoices.length, batchLimitExceeded);
-  const keyboard = new InlineKeyboard()
-    .text('1', 'rate:1').text('2', 'rate:2').text('3', 'rate:3')
-    .text('4', 'rate:4').text('5', 'rate:5');
-
-  await ctx.reply(message, { reply_markup: keyboard });
-
-  const lastVoiceRequestId = persistBatch(user, successfulVoices, result, combinedTranscript, deps);
-  decrementTrial(user.id);
-
-  // Decision 12: log request metadata (no PII/credentials/transcript)
-  const durationMs = Date.now() - pipelineStart;
-  const totalDurationSec = processVoices.reduce((sum, v) => sum + v.duration, 0);
-  console.log(
-    `[${new Date().toISOString()}] voice processed: userId=${user.id}, voices=${successfulVoices.length}, audioDuration=${totalDurationSec}s, taskCount=${result.tasks.length}, pipelineMs=${durationMs}`
-  );
-
-  // Set session state for feedback flow (Task 7)
-  ctx.session.awaitingFeedback = true;
-  ctx.session.voiceRequestId = lastVoiceRequestId;
 }
 
 /**

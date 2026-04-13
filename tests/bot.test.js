@@ -5,7 +5,7 @@ const mockUpsertUser = jest.fn(() => ({
   id: 1,
   telegram_user_id: 12345,
   telegram_username: 'testuser',
-  trial_remaining: 30,
+  trial_remaining: 20,
   trial_phase: 1,
 }));
 
@@ -48,6 +48,9 @@ describe('bot session', () => {
       pendingComment: null,
       inSurvey: false,
       surveyRetries: {},
+      awaitingAction: false,
+      pendingAction: null,
+      transcript: null,
     });
   });
 });
@@ -132,8 +135,8 @@ describe('bot handlers', () => {
   it('should reply with welcome message on /start', async () => {
     await bot.handleUpdate(makeStartUpdate());
     expect(repliedTexts.length).toBe(1);
-    // trial_remaining from mock is 30; placeholder {TRIAL_REMAINING} should be replaced
-    expect(repliedTexts[0]).toContain('30');
+    // trial_remaining from mock is 20; placeholder {TRIAL_REMAINING} should be replaced
+    expect(repliedTexts[0]).toContain('20');
     expect(repliedTexts[0]).not.toContain('{TRIAL_REMAINING}');
   });
 

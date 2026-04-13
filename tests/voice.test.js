@@ -96,31 +96,40 @@ describe('voice handler', () => {
   // ── single voice happy path ──────────────────────────────────────────────
 
   describe('single voice', () => {
-    it('downloads audio, transcribes, extracts tasks, sends formatted list', async () => {
+    it('downloads audio, transcribes, shows action buttons', async () => {
       const ctx = makeCtx();
       const deps = makeDeps();
 
       handleVoice(ctx, deps);
       jest.advanceTimersByTime(3000);
-      // processVoiceBatch is async — flush microtasks
       await jest.advanceTimersByTimeAsync(0);
 
       expect(deps.fetchFile).toHaveBeenCalled();
       expect(deps.transcribe).toHaveBeenCalled();
-      expect(deps.extractTasks).toHaveBeenCalled();
-      // Should reply with numbered task list
+      // Should NOT extract tasks yet — shows action buttons first
+      expect(deps.extractTasks).not.toHaveBeenCalled();
+      // Should reply with transcript + action buttons
       expect(ctx.reply).toHaveBeenCalled();
       const replyCall = ctx.reply.mock.calls.find(
-        (c) => typeof c[0] === 'string' && c[0].includes('1.')
+        (c) => typeof c[0] === 'string' && c[0].includes('Распознано')
       );
       expect(replyCall).toBeDefined();
-      expect(replyCall[0]).toContain('1.');
-      expect(replyCall[0]).toContain('2.');
-      expect(replyCall[0]).toContain('Купить молоко');
-      expect(replyCall[0]).toContain('Купить хлеб');
+      // Should have action buttons in reply_markup
+      const kbCall = ctx.reply.mock.calls.find(
+        (c) => c[1] && c[1].reply_markup
+      );
+      expect(kbCall).toBeDefined();
+      const buttons = kbCall[1].reply_markup.inline_keyboard.flat();
+      expect(buttons.map((b) => b.callback_data)).toEqual([
+        'action:tasks', 'action:summary',
+      ]);
+      // Session state set for action choice
+      expect(ctx.session.awaitingAction).toBe(true);
+      expect(ctx.session.transcript).toBe('купить молоко и хлеб');
+      expect(ctx.session.voiceRequestId).toBe(10);
     });
 
-    it('sends inline rating keyboard after task list', async () => {
+    it('does NOT decrement trial until action is chosen', async () => {
       const ctx = makeCtx();
       const deps = makeDeps();
 
@@ -128,20 +137,7 @@ describe('voice handler', () => {
       jest.advanceTimersByTime(3000);
       await jest.advanceTimersByTimeAsync(0);
 
-      // Find the reply call with reply_markup (inline keyboard)
-      const kbCall = ctx.reply.mock.calls.find(
-        (c) => c[1] && c[1].reply_markup
-      );
-      expect(kbCall).toBeDefined();
-      // The inline keyboard should have 5 rating buttons
-      const kb = kbCall[1].reply_markup;
-      expect(kb).toBeDefined();
-      // Check that buttons exist with callback data rate:1 through rate:5
-      const buttons = kb.inline_keyboard.flat();
-      expect(buttons.length).toBe(5);
-      expect(buttons.map((b) => b.callback_data)).toEqual([
-        'rate:1', 'rate:2', 'rate:3', 'rate:4', 'rate:5',
-      ]);
+      expect(deps.decrementTrial).not.toHaveBeenCalled();
     });
 
     it('creates voice_request record in DB', async () => {
@@ -154,23 +150,11 @@ describe('voice handler', () => {
 
       expect(deps.createVoiceRequest).toHaveBeenCalledWith(1, 'voice_file_1', 10);
       expect(deps.updateVoiceRequest).toHaveBeenCalledWith(10, {
-        taskCount: 2,
         transcriptLength: expect.any(Number),
       });
-      // Session updated for feedback flow
-      expect(ctx.session.awaitingFeedback).toBe(true);
+      // Session updated for action flow
+      expect(ctx.session.awaitingAction).toBe(true);
       expect(ctx.session.voiceRequestId).toBe(10);
-    });
-
-    it('decrements trial counter on success', async () => {
-      const ctx = makeCtx();
-      const deps = makeDeps();
-
-      handleVoice(ctx, deps);
-      jest.advanceTimersByTime(3000);
-      await jest.advanceTimersByTimeAsync(0);
-
-      expect(deps.decrementTrial).toHaveBeenCalledWith(1);
     });
 
     it('does NOT decrement trial on pipeline error', async () => {
@@ -198,33 +182,8 @@ describe('voice handler', () => {
       expect(ctx.reply).toHaveBeenCalled();
     });
 
-    it('sends no-tasks message when extractTasks returns no_tasks marker', async () => {
-      const deps = makeDeps({
-        extractResult: { tasks: [], marker: 'no_tasks', truncated: false },
-      });
-      const ctx = makeCtx();
-
-      handleVoice(ctx, deps);
-      jest.advanceTimersByTime(3000);
-      await jest.advanceTimersByTimeAsync(0);
-
-      expect(ctx.reply).toHaveBeenCalledWith(NO_TASKS_FOUND);
-      expect(deps.decrementTrial).not.toHaveBeenCalled();
-    });
-
-    it('sends split message when extractTasks returns too_many_tasks marker', async () => {
-      const deps = makeDeps({
-        extractResult: { tasks: [], marker: 'too_many_tasks', truncated: false },
-      });
-      const ctx = makeCtx();
-
-      handleVoice(ctx, deps);
-      jest.advanceTimersByTime(3000);
-      await jest.advanceTimersByTimeAsync(0);
-
-      expect(ctx.reply).toHaveBeenCalledWith(TOO_MANY_TASKS);
-      expect(deps.decrementTrial).not.toHaveBeenCalled();
-    });
+    // Markers (no_tasks, too_many_tasks) are handled in action callback handler,
+    // not in voice handler. Voice handler only shows transcript + action buttons.
 
     it('ignores voice message with no ctx.from (channel posts)', async () => {
       const ctx = makeCtx({ hasFrom: false });
@@ -341,10 +300,14 @@ describe('voice handler', () => {
 
       // Transcribe called twice (once per voice)
       expect(deps.transcribe).toHaveBeenCalledTimes(2);
-      // extractTasks called once with combined transcript string
-      expect(deps.extractTasks).toHaveBeenCalledTimes(1);
-      // Should reply
+      // extractTasks NOT called yet — user chooses via action buttons
+      expect(deps.extractTasks).not.toHaveBeenCalled();
+      // Should reply with transcript + action buttons
       expect(ctx1.reply).toHaveBeenCalled();
+      // Session should have combined transcript
+      expect(ctx1.session.transcript).toContain('part one');
+      expect(ctx1.session.transcript).toContain('part two');
+      expect(ctx1.session.awaitingAction).toBe(true);
     });
 
     it('voice after timer fires starts new buffer', async () => {
@@ -406,9 +369,9 @@ describe('voice handler', () => {
       jest.advanceTimersByTime(3000);
       await jest.advanceTimersByTimeAsync(0);
 
-      // extractTasks called with 2 successful transcripts
-      expect(deps.extractTasks).toHaveBeenCalledTimes(1);
-      // Reply should contain partial failure note
+      // extractTasks NOT called yet — user chooses via action buttons
+      expect(deps.extractTasks).not.toHaveBeenCalled();
+      // Reply should contain transcript + action buttons + partial failure note
       const replies = ctxs[0].reply.mock.calls.map((c) => c[0]).join(' ');
       expect(replies).toContain('1 из 3');
       spy.mockRestore();
@@ -456,25 +419,19 @@ describe('voice handler', () => {
       const deps = makeDeps();
       const longText = 'a'.repeat(5000);
       deps.transcribe.mockResolvedValue(longText);
-      deps.extractTasks.mockResolvedValue({
-        tasks: ['Task 1'],
-        marker: null,
-        truncated: false,
-      });
 
       const ctx = makeCtx();
       handleVoice(ctx, deps);
       jest.advanceTimersByTime(3000);
       await jest.advanceTimersByTimeAsync(0);
 
-      expect(deps.extractTasks).toHaveBeenCalled();
-      // Handler should truncate the combined transcript to 4000 chars before calling extractTasks
-      const arg = deps.extractTasks.mock.calls[0][0];
-      const combined = typeof arg === 'string' ? arg : (Array.isArray(arg) ? arg.join('\n') : '');
-      expect(combined.length).toBeLessThanOrEqual(4000);
+      // extractTasks NOT called yet — user chooses via action buttons
+      expect(deps.extractTasks).not.toHaveBeenCalled();
+      // Session transcript should be truncated to 4000
+      expect(ctx.session.transcript.length).toBeLessThanOrEqual(4000);
       // Reply should contain truncation note
       const replies = ctx.reply.mock.calls.map((c) => c[0]).join(' ');
-      expect(replies).toMatch(/сокращён|обрезан|truncat/i);
+      expect(replies).toMatch(/сокращён/i);
     });
   });
 
@@ -540,24 +497,35 @@ describe('voice handler', () => {
       jest.advanceTimersByTime(3000);
       await jest.advanceTimersByTimeAsync(0);
 
-      // Full pipeline executed
+      // Full pipeline executed (up to action buttons)
       expect(deps.upsertUser).toHaveBeenCalled();
       expect(deps.fetchFile).toHaveBeenCalled();
       expect(deps.transcribe).toHaveBeenCalled();
-      expect(deps.extractTasks).toHaveBeenCalled();
+      // extractTasks NOT called yet — user chooses via action buttons
+      expect(deps.extractTasks).not.toHaveBeenCalled();
       expect(deps.createVoiceRequest).toHaveBeenCalled();
       expect(deps.updateVoiceRequest).toHaveBeenCalled();
-      expect(deps.decrementTrial).toHaveBeenCalled();
+      // decrementTrial NOT called yet — only after action chosen
+      expect(deps.decrementTrial).not.toHaveBeenCalled();
 
-      // Session updated for feedback flow
-      expect(ctx.session.awaitingFeedback).toBe(true);
+      // Session updated for action flow
+      expect(ctx.session.awaitingAction).toBe(true);
       expect(ctx.session.voiceRequestId).toBe(10);
 
-      // Reply contains task list and keyboard
+      // Reply contains transcript and action buttons
       const replyTexts = ctx.reply.mock.calls.map((c) => c[0]);
-      const taskListReply = replyTexts.find((t) => t.includes('1.'));
-      expect(taskListReply).toContain('Купить молоко');
-      expect(taskListReply).toContain('Позвонить Маше');
+      const transcriptReply = replyTexts.find((t) => typeof t === 'string' && t.includes('Распознано'));
+      expect(transcriptReply).toContain('Нужно купить молоко');
+
+      // Check action buttons
+      const kbCall = ctx.reply.mock.calls.find(
+        (c) => c[1] && c[1].reply_markup
+      );
+      expect(kbCall).toBeDefined();
+      const buttons = kbCall[1].reply_markup.inline_keyboard.flat();
+      expect(buttons.map((b) => b.callback_data)).toEqual([
+        'action:tasks', 'action:summary',
+      ]);
     });
   });
 });
