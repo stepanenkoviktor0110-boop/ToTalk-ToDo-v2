@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { initDb, getDb, runMigrations } from './db/index.js';
-import { GigaChatProvider } from './services/llm/gigachat.js';
+import { OpenRouterProvider } from './services/llm/openrouter.js';
 import { createTranscriber } from './services/transcription.js';
 import { extractTasks } from './services/taskExtractor.js';
 import { createBot } from './bot.js';
@@ -62,9 +62,9 @@ async function main() {
   console.log(`[${new Date().toISOString()}] Database initialized and migrations applied.`);
 
   // Build service instances
-  const gigachat = new GigaChatProvider({
-    authKey: process.env.GIGACHAT_AUTH_KEY,
-    model: process.env.GIGACHAT_MODEL,
+  const llmProvider = new OpenRouterProvider({
+    apiKey: process.env.OPENROUTER_API_KEY,
+    model: process.env.LLM_MODEL,
   });
 
   const transcribe = createTranscriber();
@@ -81,7 +81,7 @@ async function main() {
 
     // Task extraction
     extractTasks,
-    llmProvider: gigachat,
+    llmProvider,
 
     // DB operations
     upsertUser,

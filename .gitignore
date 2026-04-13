@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 *.key
+config.yaml
 *.pem
 credentials.json
 secrets/
