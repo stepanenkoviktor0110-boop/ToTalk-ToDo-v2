@@ -6,6 +6,7 @@ import {
   ALL_VOICES_FAILED,
   BATCH_LIMIT_NOTE,
   TRANSCRIPT_TRUNCATED_NOTE,
+  GENERIC_ERROR,
   partialFailureNote,
 } from '../src/utils/messages.js';
 
@@ -70,6 +71,7 @@ function makeDeps({
     getUserByTelegramId: jest.fn().mockReturnValue(user),
     createVoiceRequest: jest.fn().mockReturnValue({ id: 10 }),
     updateVoiceRequest: jest.fn(),
+    saveFeedback: jest.fn(),
     decrementTrial: jest.fn().mockReturnValue(user.trial_remaining - 1),
     botToken: 'test-token',
     llmProvider: { complete: jest.fn().mockResolvedValue('1. Task one') },
@@ -526,6 +528,283 @@ describe('voice handler', () => {
       expect(buttons.map((b) => b.callback_data)).toEqual([
         'action:tasks', 'action:summary',
       ]);
+    });
+  });
+
+  // ── action callback handlers ─────────────────────────────────────────────
+
+  describe('action:tasks callback', () => {
+    it('extracts tasks and sends rating keyboard when user clicks action:tasks', async () => {
+      const deps = makeDeps({
+        extractResult: { tasks: ['Купить молоко', 'Купить хлеб'], marker: null, truncated: false },
+      });
+      const ctx = makeCtx({
+        session: {
+          awaitingAction: true,
+          pendingAction: null,
+          transcript: 'нужно купить молоко и купить хлеб',
+          voiceRequestId: 10,
+          awaitingFeedback: false,
+        },
+      });
+      // Simulate callback query context
+      ctx.callbackQuery = { data: 'action:tasks' };
+      ctx.answerCallbackQuery = jest.fn().mockResolvedValue();
+      ctx.editMessageReplyMarkup = jest.fn().mockResolvedValue();
+
+      const { handleActionTasks } = await import('../src/handlers/feedback.js');
+      await handleActionTasks(ctx, deps);
+
+      expect(deps.extractTasks).toHaveBeenCalled();
+      expect(ctx.editMessageReplyMarkup).toHaveBeenCalledWith({ reply_markup: null });
+      expect(ctx.reply).toHaveBeenCalled();
+      // Check rating keyboard
+      const kbCall = ctx.reply.mock.calls.find(
+        (c) => c[1] && c[1].reply_markup
+      );
+      expect(kbCall).toBeDefined();
+      const buttons = kbCall[1].reply_markup.inline_keyboard.flat();
+      expect(buttons.map((b) => b.callback_data)).toEqual([
+        'rate:1', 'rate:2', 'rate:3', 'rate:4', 'rate:5',
+      ]);
+      expect(deps.decrementTrial).toHaveBeenCalledWith(ctx.from.id);
+      expect(deps.updateVoiceRequest).toHaveBeenCalledWith(10, {
+        actionType: 'tasks',
+        taskCount: 2,
+      });
+    });
+
+    it('shows expired message if awaitingAction is false', async () => {
+      const deps = makeDeps();
+      const ctx = makeCtx({
+        session: {
+          awaitingAction: false,
+          pendingAction: null,
+          transcript: null,
+          voiceRequestId: null,
+        },
+      });
+      ctx.callbackQuery = { data: 'action:tasks' };
+      ctx.answerCallbackQuery = jest.fn().mockResolvedValue();
+      ctx.editMessageReplyMarkup = jest.fn().mockResolvedValue();
+
+      const { handleActionTasks } = await import('../src/handlers/feedback.js');
+      await handleActionTasks(ctx, deps);
+
+      expect(ctx.answerCallbackQuery).toHaveBeenCalledWith({ text: expect.any(String) });
+      expect(deps.extractTasks).not.toHaveBeenCalled();
+    });
+
+    it('shows no_tasks message when marker is no_tasks', async () => {
+      const deps = makeDeps({
+        extractResult: { tasks: [], marker: 'no_tasks', truncated: false },
+      });
+      const ctx = makeCtx({
+        session: {
+          awaitingAction: true,
+          pendingAction: null,
+          transcript: 'бла бла бла',
+          voiceRequestId: 10,
+          awaitingFeedback: false,
+        },
+      });
+      ctx.callbackQuery = { data: 'action:tasks' };
+      ctx.answerCallbackQuery = jest.fn().mockResolvedValue();
+      ctx.editMessageReplyMarkup = jest.fn().mockResolvedValue();
+
+      const { handleActionTasks } = await import('../src/handlers/feedback.js');
+      await handleActionTasks(ctx, deps);
+
+      expect(ctx.reply).toHaveBeenCalledWith(NO_TASKS_FOUND);
+      expect(deps.decrementTrial).not.toHaveBeenCalled();
+    });
+
+    it('shows too_many_tasks message when marker is too_many_tasks', async () => {
+      const deps = makeDeps({
+        extractResult: { tasks: [], marker: 'too_many_tasks', truncated: false },
+      });
+      const ctx = makeCtx({
+        session: {
+          awaitingAction: true,
+          pendingAction: null,
+          transcript: 'бла бла бла',
+          voiceRequestId: 10,
+          awaitingFeedback: false,
+        },
+      });
+      ctx.callbackQuery = { data: 'action:tasks' };
+      ctx.answerCallbackQuery = jest.fn().mockResolvedValue();
+      ctx.editMessageReplyMarkup = jest.fn().mockResolvedValue();
+
+      const { handleActionTasks } = await import('../src/handlers/feedback.js');
+      await handleActionTasks(ctx, deps);
+
+      expect(ctx.reply).toHaveBeenCalledWith(TOO_MANY_TASKS);
+      expect(deps.decrementTrial).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('action:summary callback', () => {
+    it('generates summary and sends it when user clicks action:summary', async () => {
+      const deps = makeDeps();
+      deps.llmProvider.complete = jest.fn().mockResolvedValue('• Нужно купить молоко\n• Позвонить Маше');
+      const ctx = makeCtx({
+        session: {
+          awaitingAction: true,
+          pendingAction: null,
+          transcript: 'нужно купить молоко и позвонить Маше',
+          voiceRequestId: 10,
+          awaitingFeedback: false,
+        },
+      });
+      ctx.callbackQuery = { data: 'action:summary' };
+      ctx.answerCallbackQuery = jest.fn().mockResolvedValue();
+      ctx.editMessageReplyMarkup = jest.fn().mockResolvedValue();
+
+      const { handleActionSummary } = await import('../src/handlers/feedback.js');
+      await handleActionSummary(ctx, deps);
+
+      expect(deps.llmProvider.complete).toHaveBeenCalled();
+      expect(ctx.editMessageReplyMarkup).toHaveBeenCalledWith({ reply_markup: null });
+      expect(ctx.reply).toHaveBeenCalled();
+      const replyText = ctx.reply.mock.calls[0][0];
+      expect(replyText).toContain('Резюме');
+      expect(replyText).toContain('молоко');
+      expect(deps.decrementTrial).toHaveBeenCalledWith(ctx.from.id);
+      expect(deps.updateVoiceRequest).toHaveBeenCalledWith(10, {
+        actionType: 'summary',
+        summaryLength: expect.any(Number),
+      });
+    });
+
+    it('shows expired message if awaitingAction is false', async () => {
+      const deps = makeDeps();
+      const ctx = makeCtx({
+        session: {
+          awaitingAction: false,
+          pendingAction: null,
+          transcript: null,
+          voiceRequestId: null,
+        },
+      });
+      ctx.callbackQuery = { data: 'action:summary' };
+      ctx.answerCallbackQuery = jest.fn().mockResolvedValue();
+      ctx.editMessageReplyMarkup = jest.fn().mockResolvedValue();
+
+      const { handleActionSummary } = await import('../src/handlers/feedback.js');
+      await handleActionSummary(ctx, deps);
+
+      expect(ctx.answerCallbackQuery).toHaveBeenCalledWith({ text: expect.any(String) });
+      expect(deps.llmProvider.complete).not.toHaveBeenCalled();
+    });
+
+    it('shows generic error if LLM call fails', async () => {
+      const deps = makeDeps();
+      deps.llmProvider.complete = jest.fn().mockRejectedValue(new Error('LLM error'));
+      const ctx = makeCtx({
+        session: {
+          awaitingAction: true,
+          pendingAction: null,
+          transcript: 'нужно купить молоко',
+          voiceRequestId: 10,
+          awaitingFeedback: false,
+        },
+      });
+      ctx.callbackQuery = { data: 'action:summary' };
+      ctx.answerCallbackQuery = jest.fn().mockResolvedValue();
+      ctx.editMessageReplyMarkup = jest.fn().mockResolvedValue();
+      const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+      const { handleActionSummary } = await import('../src/handlers/feedback.js');
+      await handleActionSummary(ctx, deps);
+
+      expect(ctx.reply).toHaveBeenCalledWith(GENERIC_ERROR);
+      expect(deps.decrementTrial).not.toHaveBeenCalled();
+      spy.mockRestore();
+    });
+  });
+
+  // ── integration: full pipeline with both actions ─────────────────────────
+
+  describe('integration: action flow', () => {
+    it('voice → action:tasks → rating → feedback saved', async () => {
+      const deps = makeDeps({
+        transcribeResult: 'нужно купить молоко',
+        extractResult: { tasks: ['Купить молоко'], marker: null, truncated: false },
+      });
+      const ctx = makeCtx();
+
+      // Step 1: Voice → transcript + action buttons
+      handleVoice(ctx, deps);
+      jest.advanceTimersByTime(3000);
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(ctx.session.awaitingAction).toBe(true);
+      expect(ctx.session.transcript).toBe('нужно купить молоко');
+      expect(deps.extractTasks).not.toHaveBeenCalled();
+
+      // Step 2: User clicks action:tasks
+      ctx.callbackQuery = { data: 'action:tasks' };
+      ctx.answerCallbackQuery = jest.fn().mockResolvedValue();
+      ctx.editMessageReplyMarkup = jest.fn().mockResolvedValue();
+      ctx.reply = jest.fn().mockResolvedValue({ message_id: 100 });
+
+      const { handleActionTasks } = await import('../src/handlers/feedback.js');
+      await handleActionTasks(ctx, deps);
+
+      expect(deps.extractTasks).toHaveBeenCalled();
+      expect(deps.decrementTrial).toHaveBeenCalled();
+      expect(ctx.session.awaitingFeedback).toBe(true);
+
+      // Step 3: User rates 5
+      const rateCtx = {
+        ...ctx,
+        callbackQuery: { data: 'rate:5' },
+        answerCallbackQuery: jest.fn().mockResolvedValue(),
+        editMessageReplyMarkup: jest.fn().mockResolvedValue(),
+        reply: jest.fn().mockResolvedValue({ message_id: 101 }),
+        session: { ...ctx.session, awaitingFeedback: true, voiceRequestId: 10 },
+      };
+      const { registerFeedbackHandler } = await import('../src/handlers/feedback.js');
+      // Simulate callback routing
+      const mockBot = { on: jest.fn() };
+      registerFeedbackHandler(mockBot, deps);
+      const callbackHandler = mockBot.on.mock.calls.find(
+        (c) => c[0] === 'callback_query:data'
+      )[1];
+      await callbackHandler(rateCtx, () => {});
+
+      expect(deps.saveFeedback).toHaveBeenCalledWith(10, 5, null, 0);
+    });
+
+    it('voice → action:summary → no rating flow', async () => {
+      const deps = makeDeps({
+        transcribeResult: 'встреча была полезная, обсудили план',
+      });
+      deps.llmProvider.complete = jest.fn().mockResolvedValue('• Обсудили план\n• Встреча полезная');
+      const ctx = makeCtx();
+
+      // Step 1: Voice → transcript + action buttons
+      handleVoice(ctx, deps);
+      jest.advanceTimersByTime(3000);
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(ctx.session.awaitingAction).toBe(true);
+      expect(ctx.session.transcript).toBe('встреча была полезная, обсудили план');
+
+      // Step 2: User clicks action:summary
+      ctx.callbackQuery = { data: 'action:summary' };
+      ctx.answerCallbackQuery = jest.fn().mockResolvedValue();
+      ctx.editMessageReplyMarkup = jest.fn().mockResolvedValue();
+      ctx.reply = jest.fn().mockResolvedValue({ message_id: 100 });
+
+      const { handleActionSummary } = await import('../src/handlers/feedback.js');
+      await handleActionSummary(ctx, deps);
+
+      expect(deps.llmProvider.complete).toHaveBeenCalled();
+      expect(deps.decrementTrial).toHaveBeenCalled();
+      // No awaitingFeedback set
+      expect(ctx.session.awaitingFeedback).toBe(false);
     });
   });
 });
